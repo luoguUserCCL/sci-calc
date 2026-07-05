@@ -33,6 +33,7 @@
 #include "embedded/katex_main.h"
 #include "embedded/katex_ams.h"
 #include "embedded/katex_size1.h"
+#include "embedded/katex_math_italic.h"
 
 using namespace scicalc;
 
@@ -124,7 +125,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 #endif
-    GLFWwindow* window = glfwCreateWindow(1300, 820, "sci-calc", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1400, 900, "sci-calc", nullptr, nullptr);
     if (!window) { glfwTerminate(); return 1; }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
@@ -153,7 +154,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     };
     const char* sysFontPath = findSystemUIFont();
     if (sysFontPath) {
-        uiFont = io.Fonts->AddFontFromFileTTF(sysFontPath, 26.0f, nullptr, uiRanges);
+        uiFont = io.Fonts->AddFontFromFileTTF(sysFontPath, 30.0f, nullptr, uiRanges);
         if (uiFont) {
             io.FontDefault = uiFont;
             mainFont = uiFont;
@@ -164,22 +165,41 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
         fprintf(stderr, "WARN: no system UI font found, using default\n");
     }
 
-    // 2. 加载 KaTeX Main (数学符号 + 数字 + 运算符)
-    static const ImWchar katexMainRanges[] = {
+    // 2. 加载 KaTeX Main (数学符号 + 数字 + 运算符 + 希腊字母)
+    //    合并 Math-Italic (π 等斜体) 和 AMS (⊊ 等额外符号)
+    static const ImWchar katexAllRanges[] = {
         0x0020, 0x00FF, // Basic Latin + Latin-1 (数字, +,-,*,/ 等)
-        0x0370, 0x03FF, // Greek (π, θ 等)
+        0x0100, 0x017F, // Latin Extended-A
+        0x0370, 0x03FF, // Greek (π, θ, Δ 等)
         0x2070, 0x209F, // superscripts/subscripts
-        0x2200, 0x22FF, // math operators (√≡≤≥∈⊆∩∪∧∨¬−×÷)
+        0x2200, 0x22FF, // math operators (√≡≤≥∈⊆∩∪∧∨¬−×÷≠)
+        0x228A, 0x228B, // ⊊ ⊋ (AMS)
         0x27C0, 0x27EF, // misc math
         0x2A00, 0x2AFF, // supp math operators
         0,
     };
     ImFontConfig katexCfg; katexCfg.FontDataOwnedByAtlas = false;
+    // 主字体: KaTeX_Main (非合并模式)
     ImFont* katexMain = io.Fonts->AddFontFromMemoryTTF(
-        (void*)kKaTeXMain, kKaTeXMain_len, 24.0f, &katexCfg, katexMainRanges);
-    // KaTeX AMS (额外 AMS 符号如 ⊊)
+        (void*)kKaTeXMain, kKaTeXMain_len, 24.0f, &katexCfg, katexAllRanges);
+    // 合并 KaTeX_Math-Italic (补充 π 等斜体希腊字母, Main 字体没有)
+    ImFontConfig mergeCfg; mergeCfg.FontDataOwnedByAtlas = false; mergeCfg.MergeMode = true;
+    io.Fonts->AddFontFromMemoryTTF(
+        (void*)kKaTeXMathItalic, kKaTeXMathItalic_len, 24.0f, &mergeCfg, katexAllRanges);
+    // 合并 KaTeX_AMS (补充 ⊊ 等 AMS 符号 + 双线字母 A-Z)
+    static const ImWchar amsRanges[] = {
+        0x0041, 0x005A, // A-Z (双线字母)
+        0x228A, 0x228B, // ⊊ ⊋
+        0x2200, 0x22FF, // math operators (AMS 补充)
+        0,
+    };
+    io.Fonts->AddFontFromMemoryTTF(
+        (void*)kKaTeXAMS, kKaTeXAMS_len, 24.0f, &mergeCfg, amsRanges);
+
+    // KaTeX_AMS 独立字体 (用于双线字母, 不合并)
+    ImFontConfig amsCfg; amsCfg.FontDataOwnedByAtlas = false;
     ImFont* katexAMS = io.Fonts->AddFontFromMemoryTTF(
-        (void*)kKaTeXAMS, kKaTeXAMS_len, 24.0f, &katexCfg, katexMainRanges);
+        (void*)kKaTeXAMS, kKaTeXAMS_len, 24.0f, &amsCfg, amsRanges);
     // KaTeX Size1 (大尺寸 ∑∏∫√)
     static const ImWchar katexSizeRanges[] = {
         0x0020, 0x00FF,
@@ -383,7 +403,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
         // --- 数字键盘 + 历史记录/变量/函数 (并排) ---
         ImGui::Separator();
         float remainH = ImGui::GetContentRegionAvail().y;
-        float keypadW = 320;
+        float keypadW = 480;
         // 左侧: 数字键盘
         ImGui::PushFont(uiFont);
         ImGui::BeginChild("##keypad", ImVec2(keypadW, remainH), true);
@@ -391,7 +411,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
         ImGui::Separator();
         // 按键插入文本到 inputBuf 末尾
         auto press = [&](const char* label, const char* insert) {
-            if (ImGui::Button(label, ImVec2(60, 40))) {
+            if (ImGui::Button(label, ImVec2(80, 50))) {
                 size_t len = std::strlen(inputBuf);
                 size_t ilen = std::strlen(insert);
                 if (len + ilen < sizeof(inputBuf) - 1) {
@@ -421,12 +441,12 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
         press("cong","cong"); ImGui::SameLine(); press("(mod)","(mod ");
         ImGui::SameLine(); press("in"," in "); ImGui::SameLine(); press("cap"," cap "); ImGui::SameLine(); press("cup"," cup ");
         // 退格
-        if (ImGui::Button(chinese?"退格":"Backspace", ImVec2(60, 40))) {
+        if (ImGui::Button(chinese?"退格":"Backspace", ImVec2(80, 50))) {
             size_t len = std::strlen(inputBuf);
             if (len > 0) inputBuf[len-1] = '\0';
         }
         ImGui::SameLine();
-        if (ImGui::Button(chinese?"清空":"Clr All", ImVec2(130, 40))) inputBuf[0]='\0';
+        if (ImGui::Button(chinese?"清空":"Clr All", ImVec2(170, 50))) inputBuf[0]='\0';
         ImGui::EndChild();
         ImGui::PopFont();
 

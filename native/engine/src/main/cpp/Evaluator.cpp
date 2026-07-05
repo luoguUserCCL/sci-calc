@@ -277,6 +277,8 @@ Value Evaluator::evalSetOp(BinOp op, const SetValuePtr& a, const SetValuePtr& b)
 static ExprPtr simplifySymbolicSqrtProduct(const Expr& aExpr, const Expr& bExpr, BinOp op);
 // 前向声明: 多项式展开 (定义在 simplifySymbolicSqrtProduct 之后)
 static ExprPtr expandSymbolicProduct(const Expr& aExpr, const Expr& bExpr);
+// 前向声明: simplifySqrt (定义在本文件后面)
+static void simplifySqrt(const BigRational& r, BigRational& scale, BigInt& radicand);
 
 // 本地 flatString (Engine.cpp 中是 static 不可见，这里给 collectLikeTerms 用)
 static std::string localFlatString(const Expr& e);
@@ -287,12 +289,34 @@ Value Evaluator::powValues(const Value& base, const Value& exp) {
         return Value::ofRat(BigRational::pow(base.rat, exp.rat.num()));
     }
     if (base.isRational() && exp.isRational() && !exp.rat.isInteger()) {
-        // rational base, fractional exponent: try to express as root.
-        // In math mode keep symbolic; decimal mode compute.
+        // 分数指数: 尝试精确计算
+        // 1/2 次方 = sqrt: 若 base 是完全平方, 返回精确值
+        BigRational half(1, 2);
+        if (exp.rat == half) {
+            // sqrt(base): 尝试精确
+            BigRational r = base.rat;
+            if (!r.isNegative()) {
+                BigRational scale; BigInt radicand;
+                simplifySqrt(r, scale, radicand);
+                if (radicand == BigInt(1)) return Value::ofRat(scale);
+                // 不完全平方: math 模式保持符号, decimal 模式用 BigFloat::sqrt
+                if (config.outputMode == OutputMode::Math) {
+                    if (scale == BigRational(1))
+                        return Value::ofSym(Expr::makeCall("sqrt", Expr::makeNumber(r)));
+                    return Value::ofSym(Expr::makeBinary(BinOp::Mul,
+                        Expr::makeNumber(scale),
+                        Expr::makeCall("sqrt", Expr::makeNumber(BigRational(radicand)))));
+                }
+                return Value::ofDec(BigFloat::sqrt(base.toBigFloat(config.precision)));
+            }
+        }
+        // 其他分数指数: math 模式保持符号, decimal 模式计算
         if (config.outputMode == OutputMode::Math)
             return Value::ofSym(Expr::makeBinary(BinOp::Pow,
                 Expr::makeNumber(base.rat), Expr::makeNumber(exp.rat)));
-        // decimal
+        // decimal: 用 sqrt 路径避免 pow 的精度问题
+        if (exp.rat == half && !base.rat.isNegative())
+            return Value::ofDec(BigFloat::sqrt(base.toBigFloat(config.precision)));
         BigFloat bf = BigFloat::pow(base.toBigFloat(config.precision),
                                     exp.toBigFloat(config.precision));
         return Value::ofDec(bf);
@@ -868,13 +892,28 @@ Value Evaluator::builtin(const std::string& name, const std::vector<Value>& args
             return Value::ofSym(Expr::makeBinary(BinOp::Mul, std::move(sNode), std::move(sqrtNode)));
         }
         if (args.size() == 2) {
-            // sqrt(a, b) = b^(1/a)
+            // sqrt(a, b) = b 的 a 次方根 = b^(1/a)
             BigRational a = args[0].toRational(), b = args[1].toRational();
+            // 尝试精确: 若 b 是 a 次方的整数, 返回精确值
+            if (a.isInteger() && b.isInteger() && !b.isNegative()) {
+                BigInt n = a.num(), m = b.num();
+                // 用二分搜索找 m 的 n 次根
+                if (!m.isZero() && n.signum() > 0) {
+                    BigInt lo(0), hi = m + BigInt(1);
+                    while (lo < hi) {
+                        BigInt mid = (lo + hi) / BigInt(2);
+                        BigInt p = BigInt::pow(mid, n);
+                        if (p == m) { return Value::ofRat(BigRational(mid)); } // 精确!
+                        if (p < m) lo = mid + BigInt(1); else hi = mid;
+                    }
+                }
+            }
             BigRational half(BigInt(1), a.num()); // 1/a (a integer)
             if (config.outputMode == OutputMode::Math)
                 return Value::ofSym(Expr::makeCall("sqrt",  Expr::makeNumber(a), Expr::makeNumber(b) ));
-            return Value::ofDec(BigFloat::pow(args[1].toBigFloat(config.precision),
-                                              BigFloat::fromRational(half, config.precision)));
+            // decimal: 用 root 避免精度问题
+            return Value::ofDec(BigFloat::root(args[1].toBigFloat(config.precision),
+                                                (unsigned)a.num().toLongLong()));
         }
         throw std::runtime_error("sqrt: 1 or 2 args");
     }
@@ -888,8 +927,24 @@ Value Evaluator::builtin(const std::string& name, const std::vector<Value>& args
             return Value::ofDec(BigFloat::ln(args[0].toBigFloat(config.precision)));
         }
         if (args.size() == 2) {
-            // log_b(1) = 0, log_b(b) = 1 (暂只识别 1)
+            // log_b(1) = 0
             if (args[1].isRational() && args[1].rat == BigRational(1)) return Value::ofRat(BigRational(0));
+            // log_b(b) = 1
+            if (args[0].isRational() && args[1].isRational() && args[0].rat == args[1].rat)
+                return Value::ofRat(BigRational(1));
+            // 尝试精确: log_base(value) = n 其中 base^n = value
+            if (args[0].isRational() && args[1].isRational() &&
+                args[0].rat.isInteger() && args[1].rat.isInteger()) {
+                BigInt base_n = args[0].rat.num(), val = args[1].rat.num();
+                if (base_n.signum() > 0 && val.signum() > 0 && base_n != BigInt(1)) {
+                    BigInt p(1);
+                    for (int n = 0; n < 10000; ++n) {
+                        if (p == val) return Value::ofRat(BigRational((long long)n));
+                        if (p > val) break;
+                        p = p * base_n;
+                    }
+                }
+            }
             if (config.outputMode == OutputMode::Math)
                 return Value::ofSym(Expr::makeCall("log",  node.args[0]->clone(), node.args[1]->clone() ));
             return Value::ofDec(BigFloat::log(args[1].toBigFloat(config.precision),

@@ -63,11 +63,11 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
             for (auto& c : b.children) {
                 BoxMetrics cm = layout(*c, cx, y, doDraw);
                 // align baselines: we draw children at y; their ascent defines baseline.
-                cx += cm.width + 2.0f; // small inter-box gap
+                cx += cm.width + 6.0f; // inter-box gap (函数之间留空)
                 maxAsc = std::max(maxAsc, cm.ascent);
                 maxDesc = std::max(maxDesc, cm.descent);
             }
-            if (!b.children.empty()) cx -= 2.0f; // remove trailing gap
+            if (!b.children.empty()) cx -= 6.0f; // remove trailing gap
             m.width = cx - x;
             m.height = maxAsc + maxDesc;
             m.ascent = maxAsc;
