@@ -35,7 +35,7 @@ struct Box {
 
     // Text
     std::string text;
-    enum TextStyle { Normal, Identifier, Number, Operator, Symbol, Keyword } style = Normal;
+    enum TextStyle { Normal, Identifier, Number, Operator, Symbol, Keyword, DoubleStruck } style = Normal;
 
     // Row / RowStacked / children
     std::vector<BoxPtr> children;

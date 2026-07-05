@@ -124,7 +124,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 #endif
-    GLFWwindow* window = glfwCreateWindow(1100, 760, "sci-calc", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1300, 820, "sci-calc", nullptr, nullptr);
     if (!window) { glfwTerminate(); return 1; }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
@@ -189,9 +189,10 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     ImFont* katexSize1 = io.Fonts->AddFontFromMemoryTTF(
         (void*)kKaTeXSize1, kKaTeXSize1_len, 28.0f, &katexCfg, katexSizeRanges);
 
-    // 数学渲染用 KaTeX Main 为主, Size1 为大符号
+    // 数学渲染用 KaTeX Main 为主, Size1 为大符号, AMS 为双线字母
     mathFont = katexMain ? katexMain : mainFont;
     ImFont* bigOpFont = katexSize1 ? katexSize1 : mathFont;
+    ImFont* amsFont = katexAMS ? katexAMS : mathFont;
     ImFont* smallFont = mathFont;
 
     ImGui::StyleColorsDark();
@@ -201,6 +202,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     BoxRenderer renderer;
     renderer.setFonts(mainFont, mathFont, smallFont);
     renderer.setBigOpFont(bigOpFont);
+    renderer.setAmsFont(amsFont);
     renderer.setScale(30.0f);
 
     // UI state
@@ -249,11 +251,13 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
 
         // --- 设置栏 (双语, 简洁) ---
         ImGui::PushFont(uiFont);
+        ImGui::SetNextItemWidth(180);
         if (ImGui::Combo(chinese?"模式":"Mode", &modeIdx, modeNames, 2)) {
             engine.config().outputMode = (modeIdx == 0) ? OutputMode::Math : OutputMode::Decimal;
             BigFloat::defaultPrecision() = engine.config().precision;
         }
         ImGui::SameLine();
+        ImGui::SetNextItemWidth(130);
         if (ImGui::Combo(chinese?"进制":"Base", &baseIdx, baseNames, 4)) engine.config().numberBase = bases[baseIdx];
         ImGui::SameLine();
         if (ImGui::Button(chinese?"设置...":"Settings...")) showSettings = true;

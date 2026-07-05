@@ -23,6 +23,7 @@ public:
     // Font configuration. main = UI/identifier font; math = math-symbol font.
     void setFonts(ImFont* main, ImFont* math, ImFont* small);
     void setBigOpFont(ImFont* bigOp) { bigOpFont_ = bigOp; }
+    void setAmsFont(ImFont* ams) { amsFont_ = ams; }  // KaTeX_AMS for double-struck
     void setScale(float px) { fontSize_ = px; }
 
     /// Compute layout metrics for a box tree (used to size the render area).
@@ -36,6 +37,7 @@ private:
     ImFont* math_ = nullptr;
     ImFont* small_ = nullptr;
     ImFont* bigOpFont_ = nullptr;  // 大运算符字体 (KaTeX Size1)
+    ImFont* amsFont_ = nullptr;    // KaTeX_AMS (双线字母)
     float fontSize_ = 20.0f;
 
     // internal layout+draw combined; measure() calls with draw=false.

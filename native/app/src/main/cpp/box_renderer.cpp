@@ -14,9 +14,9 @@ void BoxRenderer::setFonts(ImFont* main, ImFont* math, ImFont* small) {
 static ImFont* fallback(ImFont* f, ImFont* def) { return f ? f : def; }
 
 ImFont* BoxRenderer::fontFor(const Box& b) {
+    // 双线字母 (𝕀, ℝ, ℚ, ℤ) 用 KaTeX_AMS 字体
+    if (b.style == Box::DoubleStruck) return fallback(amsFont_, math_);
     // 公式渲染内部所有文本都用 KaTeX 字体 (math_)
-    // math_ = KaTeX_Main-Regular (数字/字母/运算符)
-    // bigOpFont_ = KaTeX_Size1 (大运算符)
     return fallback(math_, ImGui::GetFont());
 }
 

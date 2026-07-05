@@ -66,9 +66,10 @@ static const char* opSymbol(BinOp op) {
 }
 
 static const char* setNameSym(const std::string& n) {
-    if (n == "Real") return "\xE2\x84\x9D";       // ℝ
-    if (n == "Rational") return "\xE2\x84\x9A";   // ℚ
-    if (n == "Integer") return "\xE2\x84\xA4";    // ℤ
+    // 用普通字母, 配合 DoubleStruck 样式由 KaTeX_AMS 渲染为双线
+    if (n == "Real") return "R";
+    if (n == "Rational") return "Q";
+    if (n == "Integer") return "Z";
     return n.c_str();
 }
 
@@ -89,7 +90,7 @@ BoxPtr buildInputBox(const Expr& e) {
             if (e.name == "e") return Box::makeText("e", Box::Identifier);
             return Box::makeText(e.name, Box::Identifier);
         }
-        case Expr::SetName: return Box::makeText(setNameSym(e.name), Box::Symbol);
+        case Expr::SetName: return Box::makeText(setNameSym(e.name), Box::DoubleStruck);
         case Expr::Unary: {
             const char* op = (e.unop == UnaryOp::Neg) ? "\xE2\x88\x92" :
                              (e.unop == UnaryOp::Not) ? "\xC2\xAC" : "+"; // − ¬ +
@@ -135,10 +136,11 @@ BoxPtr buildInputBox(const Expr& e) {
                 return Box::makeFunction("ln", nullptr, buildInputBox(*e.args[0]));
             }
             if (n == "Iverson" && e.args.size() == 1) {
-                // 用 IversonSym 类型: renderer 自绘双线 I + 括号内条件
-                auto b = std::make_unique<Box>(); b->kind = Box::IversonSym;
-                b->children.push_back(buildInputBox(*e.args[0]));
-                return b;
+                // 用 KaTeX_AMS 字体渲染双线 I (𝕀), AMS 字体中 'I' 就是双线样式
+                std::vector<BoxPtr> row;
+                row.push_back(Box::makeText("I", Box::DoubleStruck));
+                row.push_back(Box::makeDelimited("(", ")", buildInputBox(*e.args[0])));
+                return Box::makeRow(std::move(row));
             }
             // 同余: cong(a, b, m) -> a ≡ b (mod m)
             if (n == "cong" && e.args.size() == 3) {
