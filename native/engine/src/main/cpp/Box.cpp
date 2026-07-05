@@ -73,8 +73,12 @@ static const char* setNameSym(const std::string& n) {
 }
 
 BoxPtr numberBox(const BigRational& r) {
-    // For input echo we use fraction form for non-integers, decimal for integers.
-    return Box::makeText(r.toFraction(), Box::Number);
+    // 整数: 直接显示; 非整数: 用 Fraction box 渲染分数线
+    if (r.isInteger()) return Box::makeText(r.num().toString(), Box::Number);
+    // 分数: 分子/分母 分行 + 分数线
+    BoxPtr num = Box::makeText(r.num().toString(), Box::Number);
+    BoxPtr den = Box::makeText(r.den().toString(), Box::Number);
+    return Box::makeFraction(std::move(num), std::move(den));
 }
 
 BoxPtr buildInputBox(const Expr& e) {
@@ -131,10 +135,10 @@ BoxPtr buildInputBox(const Expr& e) {
                 return Box::makeFunction("ln", nullptr, buildInputBox(*e.args[0]));
             }
             if (n == "Iverson" && e.args.size() == 1) {
-                std::vector<BoxPtr> row;
-                row.push_back(Box::makeText("\xE2\x84\x9D", Box::Symbol)); // 𝕀-ish; use ℝ-styled? Use I
-                row.push_back(Box::makeDelimited("(", ")", buildInputBox(*e.args[0])));
-                return Box::makeRow(std::move(row));
+                // 用 IversonSym 类型: renderer 自绘双线 I + 括号内条件
+                auto b = std::make_unique<Box>(); b->kind = Box::IversonSym;
+                b->children.push_back(buildInputBox(*e.args[0]));
+                return b;
             }
             // 同余: cong(a, b, m) -> a ≡ b (mod m)
             if (n == "cong" && e.args.size() == 3) {

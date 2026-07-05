@@ -30,6 +30,7 @@ struct Box {
         Delimited,  // |x|, ⌊x⌋, ⌈x⌉, (x), [x]
         Padded,     // spacing wrapper
         Function,   // named function like sin, log_a b
+        IversonSym, // 自绘双线 I (𝕀) + 括号内的条件
     } kind;
 
     // Text

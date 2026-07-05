@@ -32,6 +32,7 @@
 // 内嵌字体（Latin Modern Math + Noto Sans SC 子集）
 #include "embedded/latinmodern_math.h"
 #include "embedded/noto_sans_sc.h"
+#include "embedded/noto_sans_sc_ranges.h"
 
 using namespace scicalc;
 
@@ -121,10 +122,20 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
         0xFF00, 0xFFEF, // halfwidth/fullwidth
         0,
     };
-    ImFontConfig uiCfg; uiCfg.MergeMode = false;
+    // 加载 Noto Sans SC (中英文 UI) 作为主字体
+    // glyph_ranges 精确匹配子集字体中包含的字形 (从 noto_sans_sc_ranges.h)
+    static ImWchar uiRangesExact[1024];
+    int ri = 0;
+    for (unsigned int i = 0; i < kNotoSansSCRangeCount && ri < 1022; ++i) {
+        uiRangesExact[ri++] = (ImWchar)kNotoSansSCRanges[i*2];
+        uiRangesExact[ri++] = (ImWchar)kNotoSansSCRanges[i*2+1];
+    }
+    uiRangesExact[ri] = 0;
+    ImFontConfig uiCfg; uiCfg.MergeMode = false; uiCfg.FontDataOwnedByAtlas = false;
     uiFont = io.Fonts->AddFontFromMemoryTTF(
-        (void*)kNotoSansSC, kNotoSansSC_len, 22.0f, &uiCfg, uiRanges);
+        (void*)kNotoSansSC, kNotoSansSC_len, 26.0f, &uiCfg, uiRangesExact);
     if (uiFont) io.FontDefault = uiFont;
+    else fprintf(stderr, "WARN: NotoSansSC font failed to load\n");
     mainFont = uiFont ? uiFont : mainFont;
     // 加载 Latin Modern Math (数学符号)，覆盖所有数学 Unicode 块
     static const ImWchar mathRanges[] = {
@@ -140,8 +151,9 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
         0xFF00, 0xFFEF, // fullwidth
         0,
     };
+    ImFontConfig mathCfg; mathCfg.FontDataOwnedByAtlas = false;
     mathFont = io.Fonts->AddFontFromMemoryTTF(
-        (void*)kLatinModernMath, kLatinModernMath_len, 24.0f, nullptr, mathRanges);
+        (void*)kLatinModernMath, kLatinModernMath_len, 24.0f, &mathCfg, mathRanges);
     if (!mathFont) mathFont = mainFont;
     ImFont* smallFont = mathFont;
 
@@ -168,9 +180,11 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     int fixedDigits = 6;
 
     const int bases[4] = {2, 8, 10, 16};
-    const char* modeNames[2] = {"Math (symbolic)", "Decimal (high-precision)"};
-    const char* fmtNames[5] = {"General", "Scientific", "Fixed point", "Fixed significant", "Float"};
-    const char* baseNames[4] = {"2 (bin)", "8 (oct)", "10 (dec)", "16 (hex)"};
+    // 双语标签
+    const char* modeNames[2] = {"数学(符号) / Math", "小数(高精度) / Decimal"};
+    const char* fmtNames[5] = {"自动 / Auto", "科学计数 / Scientific", "定小数位 / Fixed point", "定有效位 / Fixed sig.", "浮点 / Float"};
+    const char* baseNames[4] = {"2(二进制)", "8(八进制)", "10(十进制)", "16(十六进制)"};
+    bool chinese = true;  // 默认中文
 
     // For screenshot mode, pre-evaluate the expression before the loop.
     if (screenshot) {
@@ -194,40 +208,43 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
         ImGui::Begin("sci-calc", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
-        // --- Settings bar ---
-        if (ImGui::Combo("Mode", &modeIdx, modeNames, 2)) {
+        // --- 设置栏 (双语) ---
+        ImGui::PushFont(uiFont);
+        if (ImGui::Combo(chinese?"模式":"Mode", &modeIdx, modeNames, 2)) {
             engine.config().outputMode = (modeIdx == 0) ? OutputMode::Math : OutputMode::Decimal;
             BigFloat::defaultPrecision() = engine.config().precision;
         }
         ImGui::SameLine();
-        if (ImGui::Combo("Base", &baseIdx, baseNames, 4)) engine.config().numberBase = bases[baseIdx];
+        if (ImGui::Combo(chinese?"进制":"Base", &baseIdx, baseNames, 4)) engine.config().numberBase = bases[baseIdx];
         ImGui::SameLine();
-        if (ImGui::Combo("Format", &fmtIdx, fmtNames, 5)) {
+        if (ImGui::Combo(chinese?"格式":"Format", &fmtIdx, fmtNames, 5)) {
             engine.config().numFormat = (EngineConfig::NumFormat)fmtIdx;
         }
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(120);
-        if (ImGui::InputInt("Prec", &precision)) {
+        ImGui::SetNextItemWidth(100);
+        if (ImGui::InputInt(chinese?"精度":"Prec", &precision)) {
             if (precision < 1) precision = 1;
             engine.config().precision = (unsigned)precision;
             BigFloat::defaultPrecision() = (unsigned)precision;
         }
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(120);
-        if (ImGui::InputInt("Fixed", &fixedDigits)) {
+        ImGui::SetNextItemWidth(100);
+        if (ImGui::InputInt(chinese?"小数位":"Fixed", &fixedDigits)) {
             if (fixedDigits < 0) fixedDigits = 0;
             engine.config().fixedDigits = fixedDigits;
         }
+        ImGui::SameLine();
+        if (ImGui::Button(chinese?"中/英":"CN/EN")) chinese = !chinese;
         ImGui::Separator();
 
-        // --- Input area ---
-        ImGui::Text("Math input:");
-        ImGui::PushItemWidth(-200);
+        // --- 输入区 ---
+        ImGui::Text(chinese?"数学输入:":"Math input:");
+        ImGui::PushItemWidth(-260);
         bool submitted = ImGui::InputText("##input", inputBuf, sizeof(inputBuf),
             ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::PopItemWidth();
         ImGui::SameLine();
-        if (ImGui::Button("Evaluate (Enter)") || submitted) {
+        if (ImGui::Button(chinese?"求值 (Enter)":"Evaluate (Enter)") || submitted) {
             std::string expr(inputBuf);
             if (!expr.empty()) {
                 EngineResult r = engine.evaluate(expr);
@@ -238,9 +255,10 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Clear")) { inputBuf[0]='\0'; lastOutput.clear(); lastError.clear(); lastTree.reset(); }
+        if (ImGui::Button(chinese?"清除":"Clear")) { inputBuf[0]='\0'; lastOutput.clear(); lastError.clear(); lastTree.reset(); }
+        ImGui::PopFont();
 
-        // 实时渲染: 每帧根据 inputBuf 重建 inputTree (输入时即时看到公式)
+        // 实时渲染: 每帧根据 inputBuf 重建 inputTree
         {
             std::string expr(inputBuf);
             if (!expr.empty()) {
@@ -255,32 +273,31 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
             }
         }
 
-        // --- Formula render area (input echo + result) ---
+        // --- 公式渲染区 (输入回显 + 结果) ---
         ImGui::Separator();
-        ImGui::Text("Formula rendering:");
+        ImGui::PushFont(uiFont);
+        ImGui::Text(chinese?"公式渲染:":"Formula rendering:");
+        ImGui::PopFont();
         ImVec2 area = ImGui::GetContentRegionAvail();
-        float renderH = area.y * 0.5f;
+        float renderH = area.y * 0.42f;
         ImVec2 rp = ImGui::GetCursorScreenPos();
         ImVec2 rs = ImVec2(area.x, renderH);
         ImGui::InvisibleButton("##render", rs);
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        // 纯白背景, 高对比度
         dl->AddRectFilled(rp, ImVec2(rp.x + rs.x, rp.y + rs.y), IM_COL32(255, 255, 255, 255));
         dl->AddRect(rp, ImVec2(rp.x + rs.x, rp.y + rs.y), IM_COL32(100, 100, 110, 255));
-        // draw input echo + result stacked
         float curY = rp.y + 16;
         if (inputTree) {
             ImGui::PushFont(mathFont);
-            renderer.setScale(30.0f);  // 增大字号
-            float used = renderer.draw(*inputTree, rp.x + 20, curY);
-            (void)used;
+            renderer.setScale(30.0f);
+            renderer.draw(*inputTree, rp.x + 20, curY);
             ImGui::PopFont();
             auto im = renderer.measure(*inputTree);
             curY += im.height + 24;
         }
         if (lastTree) {
             ImGui::PushFont(mathFont);
-            renderer.setScale(34.0f);  // 结果更大
+            renderer.setScale(34.0f);
             renderer.draw(*lastTree, rp.x + 20, curY);
             ImGui::PopFont();
         } else if (!lastOutput.empty()) {
@@ -289,20 +306,74 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
             ImGui::PopFont();
         }
 
-        // --- Output / error ---
+        // --- 输出/错误 ---
         ImGui::Separator();
+        ImGui::PushFont(uiFont);
         if (!lastError.empty()) {
-            ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "error: %s", lastError.c_str());
+            ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "%s: %s",
+                chinese?"错误":"error", lastError.c_str());
         } else if (!lastOutput.empty()) {
             ImGui::TextDisabled("= %s", lastOutput.c_str());
         }
+        ImGui::PopFont();
 
-        // --- History + variable/function panel (remaining space) ---
+        // --- 数字键盘 + 历史记录/变量/函数 (并排) ---
         ImGui::Separator();
         float remainH = ImGui::GetContentRegionAvail().y;
+        float keypadW = 320;
+        // 左侧: 数字键盘
+        ImGui::PushFont(uiFont);
+        ImGui::BeginChild("##keypad", ImVec2(keypadW, remainH), true);
+        ImGui::Text(chinese?"数字键盘":"Keypad");
+        ImGui::Separator();
+        // 按键插入文本到 inputBuf 末尾
+        auto press = [&](const char* label, const char* insert) {
+            if (ImGui::Button(label, ImVec2(60, 40))) {
+                size_t len = std::strlen(inputBuf);
+                size_t ilen = std::strlen(insert);
+                if (len + ilen < sizeof(inputBuf) - 1) {
+                    std::strcat(inputBuf, insert);
+                }
+            }
+        };
+        // 数字行
+        press("7","7"); ImGui::SameLine(); press("8","8"); ImGui::SameLine(); press("9","9");
+        ImGui::SameLine(); press("+","+"); ImGui::SameLine(); press("^","^");
+        // 运算行
+        press("4","4"); ImGui::SameLine(); press("5","5"); ImGui::SameLine(); press("6","6");
+        ImGui::SameLine(); press("-","-"); ImGui::SameLine(); press("(","(");
+        // 函数行
+        press("1","1"); ImGui::SameLine(); press("2","2"); ImGui::SameLine(); press("3","3");
+        ImGui::SameLine(); press("*","*"); ImGui::SameLine(); press(")",")");
+        // 底行
+        press("0","0"); ImGui::SameLine(); press(".","."); ImGui::SameLine(); press("=","=");
+        ImGui::SameLine(); press("/","/"); ImGui::SameLine(); press("%","%");
+        ImGui::Separator();
+        // 数学函数
+        press("sqrt","sqrt("); ImGui::SameLine(); press("abs","abs("); ImGui::SameLine(); press("sum","sum(");
+        ImGui::SameLine(); press("sin","sin("); ImGui::SameLine(); press("cos","cos(");
+        press("tan","tan("); ImGui::SameLine(); press("log","log("); ImGui::SameLine(); press("ln","ln(");
+        ImGui::SameLine(); press("pi","\xCF\x80"); ImGui::SameLine(); press("e","e");
+        ImGui::Separator();
+        press("cong","cong"); ImGui::SameLine(); press("(mod)","(mod ");
+        ImGui::SameLine(); press("in"," in "); ImGui::SameLine(); press("cap"," cap "); ImGui::SameLine(); press("cup"," cup ");
+        // 退格
+        if (ImGui::Button(chinese?"退格":"Backspace", ImVec2(60, 40))) {
+            size_t len = std::strlen(inputBuf);
+            if (len > 0) inputBuf[len-1] = '\0';
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(chinese?"清空":"Clr All", ImVec2(130, 40))) inputBuf[0]='\0';
+        ImGui::EndChild();
+        ImGui::PopFont();
+
+        // 右侧: 历史/变量/函数
+        ImGui::SameLine();
+        ImGui::PushFont(uiFont);
+        ImGui::BeginChild("##panels", ImVec2(0, remainH), true);
         if (ImGui::BeginTabBar("##tabs")) {
-            if (ImGui::BeginTabItem("History")) {
-                ImGui::BeginChild("##hist", ImVec2(0, remainH - 30), true);
+            if (ImGui::BeginTabItem(chinese?"历史":"History")) {
+                ImGui::BeginChild("##hist", ImVec2(0, remainH - 60), true);
                 for (int i = (int)history.size() - 1; i >= 0; --i) {
                     ImGui::Text("%s", history[i].in.c_str());
                     ImGui::SameLine();
@@ -312,19 +383,19 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
                 ImGui::EndChild();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("Variables")) {
+            if (ImGui::BeginTabItem(chinese?"变量":"Variables")) {
                 ImGui::BeginChild("##vars", ImVec2(0, remainH - 60), true);
                 for (auto& [k, v] : engine.vars()) {
                     ImGui::Text("%s = %s", k.c_str(), engine.format(v).c_str());
                     ImGui::SameLine();
                     ImGui::PushID(k.c_str());
-                    if (ImGui::SmallButton("Del")) { engine.delVar(k); }
+                    if (ImGui::SmallButton(chinese?"删":"Del")) { engine.delVar(k); }
                     ImGui::PopID();
                 }
                 ImGui::EndChild();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("Functions")) {
+            if (ImGui::BeginTabItem(chinese?"函数":"Functions")) {
                 ImGui::BeginChild("##funcs", ImVec2(0, remainH - 60), true);
                 for (auto& [k, f] : engine.funcs()) {
                     ImGui::Text("%s(", k.c_str());
@@ -332,7 +403,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
                     ImGui::SameLine(0,0); ImGui::Text(")");
                     ImGui::SameLine();
                     ImGui::PushID(k.c_str());
-                    if (ImGui::SmallButton("Del")) engine.delFunc(k);
+                    if (ImGui::SmallButton(chinese?"删":"Del")) engine.delFunc(k);
                     ImGui::PopID();
                 }
                 ImGui::EndChild();
@@ -340,6 +411,8 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
             }
             ImGui::EndTabBar();
         }
+        ImGui::EndChild();
+        ImGui::PopFont();
 
         ImGui::End();
 

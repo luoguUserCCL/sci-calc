@@ -165,10 +165,11 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
         }
         case Box::BigOp: {
             // 求和/连乘: 符号居中, 上限在正上方, 下限在正下方, body 在右侧
+            // 符号大小适中 (1.3x), 不要太巨型
             ImFont* f = fallback(math_, ImGui::GetFont());
-            float symSize = fontSize_ * 1.8f;
-            float symW = textWidth(b.opSymbol, f) * 1.5f + 4;
-            float symH = symSize;
+            float symSize = fontSize_ * 1.3f;
+            float symW = textWidth(b.opSymbol, f) * 1.1f + 4;
+            float symH = symSize * 0.9f;
             float loW = 0, hiW = 0, loH = 0, hiH = 0;
             float smallSize = fontSize_ * 0.6f;
             if (b.lower) {
@@ -187,10 +188,13 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
             if (b.body) { BoxMetrics bm = layout(*b.body, x, y, false); bodyW = bm.width; bodyH = bm.height; }
             m.width = opBlockW + 6 + bodyW;
             m.height = std::max(opBlockH, bodyH);
+            // 整体垂直居中: ascent/descent 按 opBlock 和 body 的较大者分配
             m.ascent = m.height * 0.6f; m.descent = m.height * 0.4f;
             if (doDraw) {
                 ImU32 col = IM_COL32(0, 0, 0, 255);
-                float cy = y;
+                // opBlock 垂直居中在 m.height 内
+                float opY = y + (m.height - opBlockH) / 2;
+                float cy = opY;
                 // 上限 (正上方)
                 if (b.upper) {
                     float old = fontSize_; fontSize_ = smallSize;
@@ -209,7 +213,7 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
                     layout(*b.lower, x + (opBlockW - loW)/2, cy, true);
                     fontSize_ = old;
                 }
-                // body 在右侧垂直居中
+                // body 在右侧, 垂直居中
                 if (b.body) layout(*b.body, x + opBlockW + 6, y + (m.height - bodyH)/2, true);
             }
             break;
@@ -268,6 +272,51 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
             if (!b.children.empty()) {
                 BoxMetrics im = layout(*b.children[0], x, y, doDraw);
                 m = im; m.width += 6;
+            }
+            break;
+        }
+        case Box::IversonSym: {
+            // 自绘双线 I (𝕀) + (条件)
+            // 先测量内部条件
+            BoxMetrics condM;
+            if (!b.children.empty()) condM = layout(*b.children[0], x, y, false);
+            float iW = fontSize_ * 0.5f;
+            float parenW = fontSize_ * 0.3f;
+            float gap = fontSize_ * 0.15f;
+            m.width = iW + gap + parenW + condM.width + parenW + gap;
+            m.height = condM.height;
+            m.ascent = condM.ascent; m.descent = condM.descent;
+            if (doDraw) {
+                ImU32 col = IM_COL32(0, 0, 0, 255);
+                float cx = x;
+                // 自绘双线 I: 两条竖线 + 上下短横 (衬线)
+                float lineThick = std::max(1.5f, fontSize_ * 0.06f);
+                float iH = condM.height;
+                float iTop = y;
+                float iBot = y + iH;
+                float serifW = iW * 0.7f;
+                // 左竖线
+                dl->AddLine(ImVec2(cx + iW*0.25f, iTop), ImVec2(cx + iW*0.25f, iBot), col, lineThick);
+                // 右竖线
+                dl->AddLine(ImVec2(cx + iW*0.75f, iTop), ImVec2(cx + iW*0.75f, iBot), col, lineThick);
+                // 上衬线
+                dl->AddLine(ImVec2(cx + iW*0.15f, iTop), ImVec2(cx + iW*0.85f, iTop), col, lineThick);
+                // 下衬线
+                dl->AddLine(ImVec2(cx + iW*0.15f, iBot), ImVec2(cx + iW*0.85f, iBot), col, lineThick);
+                cx += iW + gap;
+                // 左括号
+                ImFont* f = fallback(math_, ImGui::GetFont());
+                ImGui::PushFont(f);
+                dl->AddText(f, fontSize_, ImVec2(cx, y), col, "(");
+                cx += parenW;
+                ImGui::PopFont();
+                // 条件
+                if (!b.children.empty()) layout(*b.children[0], cx, y, true);
+                cx += condM.width;
+                // 右括号
+                ImGui::PushFont(f);
+                dl->AddText(f, fontSize_, ImVec2(cx, y), col, ")");
+                ImGui::PopFont();
             }
             break;
         }
