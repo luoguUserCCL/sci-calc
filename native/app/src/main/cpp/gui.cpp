@@ -196,10 +196,10 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     io.Fonts->AddFontFromMemoryTTF(
         (void*)kKaTeXAMS, kKaTeXAMS_len, 24.0f, &mergeCfg, amsRanges);
 
-    // KaTeX_AMS 独立字体 (用于双线字母, 不合并)
+    // KaTeX_AMS 独立字体 (用于双线字母, 不合并) — 字号略大补偿 AMS 字形偏小
     ImFontConfig amsCfg; amsCfg.FontDataOwnedByAtlas = false;
     ImFont* katexAMS = io.Fonts->AddFontFromMemoryTTF(
-        (void*)kKaTeXAMS, kKaTeXAMS_len, 24.0f, &amsCfg, amsRanges);
+        (void*)kKaTeXAMS, kKaTeXAMS_len, 28.0f, &amsCfg, amsRanges);  // 28px 补偿偏小
     // KaTeX Size1 (大尺寸 ∑∏∫√)
     static const ImWchar katexSizeRanges[] = {
         0x0020, 0x00FF,

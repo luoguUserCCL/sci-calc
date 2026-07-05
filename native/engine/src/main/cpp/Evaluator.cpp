@@ -5,6 +5,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <map>
+#include <vector>
 
 namespace scicalc {
 
@@ -1051,6 +1052,56 @@ Value Evaluator::builtin(const std::string& name, const std::vector<Value>& args
         BigInt two256 = BigInt(1) << 256;
         BigRational frac(r, two256);
         return Value::ofRat(lo + (hi - lo) * frac);
+    }
+    // 组合数 C(n,m) = n! / (m! * (n-m)!)
+    if (name == "combination" || name == "comb") {
+        need(2);
+        BigInt n = args[0].toRational().trunc(), m = args[1].toRational().trunc();
+        if (n.isNegative() || m.isNegative() || m > n) return Value::ofRat(BigRational(0));
+        BigInt num = BigInt::factorial((unsigned long long)n.toLongLong());
+        BigInt den = BigInt::factorial((unsigned long long)m.toLongLong()) *
+                     BigInt::factorial((unsigned long long)(n - m).toLongLong());
+        return Value::ofRat(BigRational(num / den));
+    }
+    // 排列数 P(n,m) = n! / (n-m)!
+    if (name == "permutation" || name == "perm") {
+        need(2);
+        BigInt n = args[0].toRational().trunc(), m = args[1].toRational().trunc();
+        if (n.isNegative() || m.isNegative() || m > n) return Value::ofRat(BigRational(0));
+        BigInt num = BigInt::factorial((unsigned long long)n.toLongLong());
+        BigInt den = BigInt::factorial((unsigned long long)(n - m).toLongLong());
+        return Value::ofRat(BigRational(num / den));
+    }
+    // 第一类 Stirling 数 s(n,m) — 递推: s(n,m) = s(n-1,m-1) - (n-1)*s(n-1,m)
+    if (name == "stirling1") {
+        need(2);
+        long long n = args[0].toRational().trunc().toLongLong();
+        long long m = args[1].toRational().trunc().toLongLong();
+        if (n < 0 || m < 0) return Value::ofRat(BigRational(0));
+        if (n == 0 && m == 0) return Value::ofRat(BigRational(1));
+        if (m == 0 || m > n) return Value::ofRat(BigRational(0));
+        // 递推表
+        std::vector<std::vector<BigInt>> s(n + 1, std::vector<BigInt>(m + 1, BigInt(0)));
+        s[0][0] = BigInt(1);
+        for (long long i = 1; i <= n; ++i)
+            for (long long j = 1; j <= std::min(i, m); ++j)
+                s[i][j] = s[i-1][j-1] - BigInt(i-1) * s[i-1][j];
+        return Value::ofRat(BigRational(s[n][m]));
+    }
+    // 第二类 Stirling 数 S(n,m) — 递推: S(n,m) = m*S(n-1,m) + S(n-1,m-1)
+    if (name == "stirling2") {
+        need(2);
+        long long n = args[0].toRational().trunc().toLongLong();
+        long long m = args[1].toRational().trunc().toLongLong();
+        if (n < 0 || m < 0) return Value::ofRat(BigRational(0));
+        if (n == 0 && m == 0) return Value::ofRat(BigRational(1));
+        if (m == 0 || m > n) return Value::ofRat(BigRational(0));
+        std::vector<std::vector<BigInt>> S(n + 1, std::vector<BigInt>(m + 1, BigInt(0)));
+        S[0][0] = BigInt(1);
+        for (long long i = 1; i <= n; ++i)
+            for (long long j = 1; j <= std::min(i, m); ++j)
+                S[i][j] = BigInt(j) * S[i-1][j] + S[i-1][j-1];
+        return Value::ofRat(BigRational(S[n][m]));
     }
     if (name == "Iverson") {
         need(1);

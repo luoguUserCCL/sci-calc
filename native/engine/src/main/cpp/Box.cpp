@@ -153,13 +153,68 @@ BoxPtr buildInputBox(const Expr& e) {
                 row.push_back(Box::makeText(")", Box::Normal));
                 return Box::makeRow(std::move(row));
             }
-            // generic function: name(arg, ...)
-            std::vector<BoxPtr> args;
-            for (size_t i = 0; i < e.args.size(); ++i) {
-                if (i) args.push_back(Box::makeText(", ", Box::Normal));
-                args.push_back(buildInputBox(*e.args[i]));
+            // 组合数: combination(n,m) -> C 下标 n 上标 m
+            if ((n == "combination" || n == "comb") && e.args.size() == 2) {
+                BoxPtr base = Box::makeText("C", Box::Identifier);
+                BoxPtr sub = buildInputBox(*e.args[0]);  // n 为下标
+                BoxPtr sup = buildInputBox(*e.args[1]);  // m 为上标
+                return Box::makeSupSub(std::move(base), std::move(sup), std::move(sub));
             }
-            return Box::makeFunction(n, nullptr, Box::makeRow(std::move(args)));
+            // 排列数: permutation(n,m) -> P 下标 n 上标 m
+            if ((n == "permutation" || n == "perm") && e.args.size() == 2) {
+                BoxPtr base = Box::makeText("P", Box::Identifier);
+                BoxPtr sub = buildInputBox(*e.args[0]);
+                BoxPtr sup = buildInputBox(*e.args[1]);
+                return Box::makeSupSub(std::move(base), std::move(sup), std::move(sub));
+            }
+            // 第一类 Stirling 数: stirling1(n,m) -> 大方括号 [ 上 m 下 n ]
+            if (n == "stirling1" && e.args.size() == 2) {
+                BoxPtr sub = buildInputBox(*e.args[0]);  // n 下
+                BoxPtr sup = buildInputBox(*e.args[1]);  // m 上
+                BoxPtr bracket = Box::makeSupSub(nullptr, std::move(sup), std::move(sub));
+                return Box::makeDelimited("[", "]", std::move(bracket));
+            }
+            // 第二类 Stirling 数: stirling2(n,m) -> 大花括号 { 上 m 下 n }
+            if (n == "stirling2" && e.args.size() == 2) {
+                BoxPtr sub = buildInputBox(*e.args[0]);
+                BoxPtr sup = buildInputBox(*e.args[1]);
+                BoxPtr brace = Box::makeSupSub(nullptr, std::move(sup), std::move(sub));
+                return Box::makeDelimited("{", "}", std::move(brace));
+            }
+            // generic function: name(arg, ...)
+            // 某些函数强制加括号 (exp, rand, abs, floor, ceil, fact, gcd, lcm, etc.)
+            // 其他函数: 单项式参数不加括号, 含 +-*/% 的参数加括号
+            {
+                static const char* forceParens[] = {
+                    "exp","rand","abs","floor","ceil","trunc","round","sign","sgn",
+                    "fact","factorial","gcd","lcm","min","max","pow","Iverson","cong",
+                    "combination","comb","permutation","perm","stirling1","stirling2", nullptr
+                };
+                bool force = false;
+                for (auto* fn : forceParens) { if (n == fn) { force = true; break; } }
+                std::vector<BoxPtr> args;
+                for (size_t i = 0; i < e.args.size(); ++i) {
+                    if (i) args.push_back(Box::makeText(", ", Box::Normal));
+                    if (force) {
+                        // 强制加括号
+                        args.push_back(Box::makeDelimited("(", ")", buildInputBox(*e.args[i])));
+                    } else {
+                        // 单项式不加括号, 含运算符的加括号
+                        bool needParen = false;
+                        if (e.args[i] && e.args[i]->kind == Expr::Binary) {
+                            BinOp op = e.args[i]->binop;
+                            if (op == BinOp::Add || op == BinOp::Sub ||
+                                op == BinOp::Mul || op == BinOp::Div || op == BinOp::Mod)
+                                needParen = true;
+                        }
+                        if (needParen)
+                            args.push_back(Box::makeDelimited("(", ")", buildInputBox(*e.args[i])));
+                        else
+                            args.push_back(buildInputBox(*e.args[i]));
+                    }
+                }
+                return Box::makeFunction(n, nullptr, Box::makeRow(std::move(args)));
+            }
         }
         case Expr::AssignVar: {
             std::vector<BoxPtr> row;

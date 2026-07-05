@@ -105,7 +105,8 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
             break;
         }
         case Box::SupSub: {
-            BoxMetrics bm = layout(*b.base, x, y, false);
+            BoxMetrics bm;
+            if (b.base) bm = layout(*b.base, x, y, false);
             float smallSize = fontSize_ * 0.65f;
             float baseW = bm.width;
             float curX = x + baseW;
@@ -114,7 +115,7 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
             if (b.sup) {
                 float oldSize = fontSize_;
                 fontSize_ = smallSize;
-                BoxMetrics sm = layout(*b.sup, curX, y - bm.ascent * 0.45f, doDraw);
+                BoxMetrics sm = layout(*b.sup, curX, y - (b.base ? bm.ascent * 0.45f : 0), doDraw);
                 fontSize_ = oldSize;
                 supW = sm.width;
                 curX += sm.width;
@@ -123,45 +124,43 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
             if (b.sub) {
                 float oldSize = fontSize_;
                 fontSize_ = smallSize;
-                BoxMetrics sm = layout(*b.sub, x + baseW, y + bm.ascent * 0.55f, doDraw);
+                BoxMetrics sm = layout(*b.sub, x + baseW, y + (b.base ? bm.ascent * 0.55f : 0), doDraw);
                 fontSize_ = oldSize;
                 subW = sm.width;
                 curX = std::max(curX, x + baseW + sm.width);
-                desc = std::max(desc, sm.height + bm.ascent * 0.55f);
+                desc = std::max(desc, sm.height + (b.base ? bm.ascent * 0.55f : 0));
             }
             m.width = (b.sup && b.sub) ? std::max(supW, subW) + baseW : curX - x;
             m.height = asc + desc;
             m.ascent = asc; m.descent = desc;
-            if (doDraw) layout(*b.base, x, y, true);
+            if (doDraw && b.base) layout(*b.base, x, y, true);
             break;
         }
         case Box::Radical: {
-            // 自绘根号: 钩 + 横线 (不依赖字体的 √ 字形, 避免缺字/残缺)
+            // 用 KaTeX_Size1 字体的 √ 字符渲染根号 (大尺寸, 有完整钩形)
             BoxMetrics rm = layout(*b.radicand, x, y, false);
-            float radSymW = fontSize_ * 0.5f;
-            float radHookH = fontSize_ * 0.6f;
-            float barY = y;  // 横线在 radicand 顶部
+            ImFont* radFont = fallback(bigOpFont_ ? bigOpFont_ : math_, ImGui::GetFont());
+            float radSize = fontSize_ * 1.2f;
+            float radSymW = radFont->CalcTextSizeA(radSize, FLT_MAX, 0, "\xE2\x88\x9A").x; // √
             float w = radSymW + rm.width + 4.0f;
             m.width = w;
-            m.height = rm.height + radHookH * 0.3f;
-            m.ascent = rm.ascent + radHookH * 0.3f;
+            m.height = rm.height + fontSize_ * 0.15f;
+            m.ascent = rm.ascent + fontSize_ * 0.15f;
             m.descent = rm.descent;
             if (doDraw) {
-                float hookX = x;
-                float hookTopY = barY + radHookH * 0.3f;  // 钩的底部
-                float hookMidY = barY - radHookH * 0.2f;  // 钩中部
-                float lineThick = std::max(1.5f, fontSize_ * 0.08f);
-                ImU32 col = IM_COL32(0, 0, 0, 255);  // 纯黑, 高对比度
-                // 根号钩: 从左下到中点再向上到横线
-                dl->AddLine(ImVec2(hookX, hookTopY), ImVec2(hookX + radSymW * 0.4f, hookMidY),
+                ImU32 col = IM_COL32(0, 0, 0, 255);
+                // 用 KaTeX_Size1 字体画 √ 符号
+                ImGui::PushFont(radFont);
+                dl->AddText(radFont, radSize, ImVec2(x, y), col, "\xE2\x88\x9A"); // √
+                ImGui::PopFont();
+                // radicand 在 √ 右侧
+                layout(*b.radicand, x + radSymW, y + fontSize_ * 0.15f, true);
+                // overline 覆盖 radicand (根号上划线)
+                float lineThick = std::max(1.5f, fontSize_ * 0.06f);
+                float barY = y + fontSize_ * 0.05f;
+                dl->AddLine(ImVec2(x + radSymW * 0.7f, barY),
+                            ImVec2(x + radSymW + rm.width + 2, barY),
                             col, lineThick);
-                dl->AddLine(ImVec2(hookX + radSymW * 0.4f, hookMidY), ImVec2(hookX + radSymW, barY),
-                            col, lineThick);
-                // 横线 (覆盖 radicand)
-                dl->AddLine(ImVec2(hookX + radSymW, barY),
-                            ImVec2(hookX + radSymW + rm.width + 2, barY),
-                            col, lineThick);
-                layout(*b.radicand, x + radSymW + 2, y + radHookH * 0.3f, true);
             }
             break;
         }
