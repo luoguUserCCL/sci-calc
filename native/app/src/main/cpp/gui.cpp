@@ -25,29 +25,56 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+  #include <windows.h>   // MessageBoxA
+#endif
+
+// 内嵌字体（Latin Modern Math + Noto Sans SC 子集）
+#include "embedded/latinmodern_math.h"
+#include "embedded/noto_sans_sc.h"
+
 using namespace scicalc;
 
-static void glfwError(int code, const char* desc) { fprintf(stderr, "GLFW error %d: %s\n", code, desc); }
+static int runGuiImpl(int argc, char** argv, Engine& engine);
 
-// Locate a Unicode TTF with math-symbol coverage for the renderer.
-static const char* findUnicodeFont() {
-    const char* candidates[] = {
-        "/usr/share/fonts/truetype/noto/NotoSansSC-Regular.otf",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "./assets/fonts/NotoSansSC-Regular.otf",
-        nullptr
-    };
-    for (auto* p : candidates) {
-        if (!p) break;
-        std::ifstream f(p, std::ios::binary);
-        if (f.good()) return p;
-    }
-    return nullptr;
+static void glfwError(int code, const char* desc) {
+#ifdef _WIN32
+    char buf[512];
+    std::snprintf(buf, sizeof(buf), "GLFW error %d: %s", code, desc ? desc : "(null)");
+    MessageBoxA(nullptr, buf, "sci-calc GLFW error", MB_OK | MB_ICONERROR);
+#else
+    std::fprintf(stderr, "GLFW error %d: %s\n", code, desc ? desc : "(null)");
+#endif
 }
 
+// Locate a Unicode TTF with math-symbol coverage for the renderer.
+// 优先从内嵌字体加载（Latin Modern Math 用于数学符号，Noto Sans SC 用于中英文）。
+static const char* findUnicodeFont() { return nullptr; }  // 不再从文件系统加载
+
 int runGui(int argc, char** argv, Engine& engine) {
+    // 用 try/catch 包裹整个 GUI 逻辑，崩溃时弹出 MessageBox（Windows GUI
+    // 子系统没有 stderr，否则错误不可见）。
+    try {
+        return runGuiImpl(argc, argv, engine);
+    } catch (const std::exception& e) {
+        const char* msg = e.what();
+#ifdef _WIN32
+        MessageBoxA(nullptr, msg, "sci-calc GUI error", MB_OK | MB_ICONERROR);
+#else
+        std::fprintf(stderr, "sci-calc GUI error: %s\n", msg);
+#endif
+        return 1;
+    } catch (...) {
+#ifdef _WIN32
+        MessageBoxA(nullptr, "unknown exception", "sci-calc GUI error", MB_OK | MB_ICONERROR);
+#else
+        std::fprintf(stderr, "sci-calc GUI: unknown exception\n");
+#endif
+        return 1;
+    }
+}
+
+static int runGuiImpl(int argc, char** argv, Engine& engine) {
     // Optional: --screenshot "EXPR" OUT.ppm  -> render one frame and save a PPM.
     bool screenshot = false;
     std::string shotExpr, shotPath;
@@ -80,30 +107,42 @@ int runGui(int argc, char** argv, Engine& engine) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Fonts: default (UI) + a Unicode font (math symbols + CJK) for rendering.
+    // 字体: 内嵌 Latin Modern Math (数学符号) + Noto Sans SC (中英文 UI)。
+    // 两个字体都从编译进二进制的字节数组加载，无需任何外部文件。
     ImFont* mainFont = io.Fonts->AddFontDefault();
     ImFont* mathFont = mainFont;
-    const char* ufont = findUnicodeFont();
-    if (ufont) {
-        // Load full Unicode ranges (Greek, math operators, CJK).
-        static const ImWchar ranges[] = {
-            0x0020, 0x00FF, // Basic Latin + Latin-1
-            0x0100, 0x017F, // Latin Extended-A
-            0x0370, 0x03FF, // Greek
-            0x2070, 0x209F, // superscripts/subscripts
-            0x2200, 0x22FF, // math operators
-            0x27C0, 0x27EF, // misc math
-            0x2A00, 0x2AFF, // supp math operators
-            0x4E00, 0x9FFF, // CJK
-            0x3000, 0x303F, // CJK punctuation
-            0xFF00, 0xFFEF, // halfwidth/fullwidth
-            0,
-        };
-        mathFont = io.Fonts->AddFontFromFileTTF(ufont, 22.0f, nullptr, ranges);
-        if (!mathFont) mathFont = mainFont;
-        // Also use it as the main UI font so Chinese UI text renders.
-        io.FontDefault = mathFont;
-    }
+    ImFont* uiFont = mainFont;
+    // 加载 Noto Sans SC (中英文 UI) 作为主字体
+    static const ImWchar uiRanges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin-1
+        0x0100, 0x017F, // Latin Extended-A
+        0x3000, 0x303F, // CJK punctuation
+        0x4E00, 0x5000, // CJK 常用
+        0xFF00, 0xFFEF, // halfwidth/fullwidth
+        0,
+    };
+    ImFontConfig uiCfg; uiCfg.MergeMode = false;
+    uiFont = io.Fonts->AddFontFromMemoryTTF(
+        (void*)kNotoSansSC, kNotoSansSC_len, 22.0f, &uiCfg, uiRanges);
+    if (uiFont) io.FontDefault = uiFont;
+    mainFont = uiFont ? uiFont : mainFont;
+    // 加载 Latin Modern Math (数学符号)，覆盖所有数学 Unicode 块
+    static const ImWchar mathRanges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin-1 (数字、运算符)
+        0x0100, 0x017F, // Latin Extended-A
+        0x0370, 0x03FF, // Greek
+        0x2070, 0x209F, // superscripts/subscripts
+        0x2200, 0x22FF, // math operators
+        0x27C0, 0x27EF, // misc math
+        0x2A00, 0x2AFF, // supp math operators
+        0x3000, 0x303F, // CJK punct
+        0x4E00, 0x5000, // CJK 常用
+        0xFF00, 0xFFEF, // fullwidth
+        0,
+    };
+    mathFont = io.Fonts->AddFontFromMemoryTTF(
+        (void*)kLatinModernMath, kLatinModernMath_len, 24.0f, nullptr, mathRanges);
+    if (!mathFont) mathFont = mainFont;
     ImFont* smallFont = mathFont;
 
     ImGui::StyleColorsDark();

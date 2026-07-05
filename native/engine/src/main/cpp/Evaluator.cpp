@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <map>
 
 namespace scicalc {
 
@@ -274,6 +275,11 @@ Value Evaluator::evalSetOp(BinOp op, const SetValuePtr& a, const SetValuePtr& b)
 
 // 前向声明: 符号乘除的 sqrt 合并化简 (定义在 simplifySqrt 之后)
 static ExprPtr simplifySymbolicSqrtProduct(const Expr& aExpr, const Expr& bExpr, BinOp op);
+// 前向声明: 多项式展开 (定义在 simplifySymbolicSqrtProduct 之后)
+static ExprPtr expandSymbolicProduct(const Expr& aExpr, const Expr& bExpr);
+
+// 本地 flatString (Engine.cpp 中是 static 不可见，这里给 collectLikeTerms 用)
+static std::string localFlatString(const Expr& e);
 
 Value Evaluator::powValues(const Value& base, const Value& exp) {
     // integer exponent -> exact rational power (fast exponentiation)
@@ -361,6 +367,15 @@ Value Evaluator::evalBinary(BinOp op, const Value& a, const Value& b, const Expr
                     if (simplified->kind == Expr::Number)
                         return Value::ofRat(simplified->num);
                     return Value::ofSym(std::move(simplified));
+                }
+            }
+            // 乘法: 尝试多项式展开 + 合并同类项 (如 (1+sqrt(2))*(sqrt(2)-1)=1)
+            if (op == B::Mul) {
+                ExprPtr expanded = expandSymbolicProduct(*la, *lb);
+                if (expanded) {
+                    if (expanded->kind == Expr::Number)
+                        return Value::ofRat(expanded->num);
+                    return Value::ofSym(std::move(expanded));
                 }
             }
             return Value::ofSym(Expr::makeBinary(op, std::move(la), std::move(lb)));
@@ -522,6 +537,239 @@ static ExprPtr simplifySymbolicSqrtProduct(const Expr& aExpr, const Expr& bExpr,
     if (newCoeff == BigRational(1)) return sqrtNode;
     if (newCoeff == BigRational(-1)) return Expr::makeUnary(UnaryOp::Neg, std::move(sqrtNode));
     return Expr::makeBinary(BinOp::Mul, Expr::makeNumber(newCoeff), std::move(sqrtNode));
+}
+
+// ---------------------------------------------------------------------------
+// 多项式展开与化简 (分配律 + 合并同类项)
+// ---------------------------------------------------------------------------
+
+struct PolyTerm {
+    BigRational coeff;
+    std::vector<ExprPtr> factors;
+};
+
+static bool toPolyTerms(const Expr& e, std::vector<PolyTerm>& out);
+static void collectLikeTerms(std::vector<PolyTerm>& terms);
+
+static bool normalizeFactor(const Expr& e, BigRational& coeff, ExprPtr& factor) {
+    if (e.kind == Expr::Number) {
+        coeff = e.num;
+        factor = nullptr;
+        return true;
+    }
+    if (e.kind == Expr::Call && e.name == "sqrt" && e.args.size() == 1 &&
+        e.args[0] && e.args[0]->kind == Expr::Number) {
+        BigRational scale; BigInt rad;
+        simplifySqrt(e.args[0]->num, scale, rad);
+        coeff = scale;
+        if (rad == BigInt(1)) { factor = nullptr; return true; }
+        factor = Expr::makeCall("sqrt", Expr::makeNumber(BigRational(rad)));
+        return true;
+    }
+    if (e.kind == Expr::Unary && e.unop == UnaryOp::Neg && e.lhs) {
+        if (!normalizeFactor(*e.lhs, coeff, factor)) return false;
+        coeff = -coeff;
+        return true;
+    }
+    coeff = BigRational(1);
+    factor = e.clone();
+    return true;
+}
+
+static void mulPolyTerms(const std::vector<PolyTerm>& a, const std::vector<PolyTerm>& b,
+                         std::vector<PolyTerm>& out) {
+    for (const auto& ta : a) {
+        for (const auto& tb : b) {
+            PolyTerm t;
+            t.coeff = ta.coeff * tb.coeff;
+            // clone factors (a, b are const ref)
+            for (const auto& f : ta.factors) t.factors.push_back(f->clone());
+            for (const auto& f : tb.factors) t.factors.push_back(f->clone());
+            out.push_back(std::move(t));
+        }
+    }
+}
+
+static void collectLikeTerms(std::vector<PolyTerm>& terms) {
+    auto normalize = [](PolyTerm& t) {
+        std::vector<ExprPtr> remaining;
+        for (auto& f : t.factors) {
+            BigRational c; ExprPtr fact;
+            if (normalizeFactor(*f, c, fact)) {
+                t.coeff = t.coeff * c;
+                if (fact) remaining.push_back(std::move(fact));
+            } else {
+                remaining.push_back(f->clone());
+            }
+        }
+        t.factors = std::move(remaining);
+    };
+    // 合并因子列表中相同的 sqrt(Number) 因子对 (sqrt(a)*sqrt(a)=a, sqrt(a)*sqrt(b)=sqrt(a*b))
+    auto mergeSqrtFactors = [](PolyTerm& t) {
+        std::vector<ExprPtr> sqrts, others;
+        for (auto& f : t.factors) {
+            if (f->kind == Expr::Call && f->name == "sqrt" && f->args.size() == 1 &&
+                f->args[0] && f->args[0]->kind == Expr::Number)
+                sqrts.push_back(f->clone());
+            else
+                others.push_back(f->clone());
+        }
+        // 两两合并 sqrt
+        while (sqrts.size() >= 2) {
+            ExprPtr a = std::move(sqrts.back()); sqrts.pop_back();
+            ExprPtr b = std::move(sqrts.back()); sqrts.pop_back();
+            // sqrt(a)*sqrt(b) -> simplifySqrt(a*b)
+            BigRational ra = a->args[0]->num, rb = b->args[0]->num;
+            BigRational prod = ra * rb;
+            BigRational scale; BigInt rad;
+            simplifySqrt(prod, scale, rad);
+            t.coeff = t.coeff * scale;
+            if (rad != BigInt(1)) {
+                sqrts.push_back(Expr::makeCall("sqrt", Expr::makeNumber(BigRational(rad))));
+            }
+        }
+        t.factors = std::move(others);
+        for (auto& s : sqrts) t.factors.push_back(std::move(s));
+    };
+    auto termKey = [](const PolyTerm& t) {
+        std::string k;
+        for (const auto& f : t.factors) k += localFlatString(*f) + "|";
+        return k;
+    };
+    for (auto& t : terms) { normalize(t); mergeSqrtFactors(t); }
+    std::map<std::string, size_t> keyToIdx;
+    std::vector<PolyTerm> merged;
+    for (auto& t : terms) {
+        if (t.coeff.isZero()) continue;
+        std::string k = termKey(t);
+        auto it = keyToIdx.find(k);
+        if (it != keyToIdx.end()) {
+            merged[it->second].coeff = merged[it->second].coeff + t.coeff;
+        } else {
+            keyToIdx[k] = merged.size();
+            merged.push_back(std::move(t));
+        }
+    }
+    std::vector<PolyTerm> nonZero;
+    for (auto& t : merged) if (!t.coeff.isZero()) nonZero.push_back(std::move(t));
+    terms = std::move(nonZero);
+}
+
+static bool toPolyTerms(const Expr& e, std::vector<PolyTerm>& out) {
+    switch (e.kind) {
+        case Expr::Number:
+            out.push_back({e.num, {}});
+            return true;
+        case Expr::Unary:
+            if (e.unop == UnaryOp::Neg && e.lhs) {
+                if (!toPolyTerms(*e.lhs, out)) return false;
+                for (auto& t : out) t.coeff = -t.coeff;
+                return true;
+            }
+            if (e.unop == UnaryOp::Pos && e.lhs) return toPolyTerms(*e.lhs, out);
+            return false;
+        case Expr::Binary: {
+            if (e.binop == BinOp::Add || e.binop == BinOp::Sub) {
+                std::vector<PolyTerm> l, r;
+                if (!e.lhs || !toPolyTerms(*e.lhs, l)) return false;
+                if (!e.rhs || !toPolyTerms(*e.rhs, r)) return false;
+                if (e.binop == BinOp::Sub) for (auto& t : r) t.coeff = -t.coeff;
+                // move l into out, then move r
+                for (auto& t : l) out.push_back(std::move(t));
+                for (auto& t : r) out.push_back(std::move(t));
+                return true;
+            }
+            if (e.binop == BinOp::Mul) {
+                std::vector<PolyTerm> l, r;
+                if (!e.lhs || !toPolyTerms(*e.lhs, l)) return false;
+                if (!e.rhs || !toPolyTerms(*e.rhs, r)) return false;
+                mulPolyTerms(l, r, out);
+                collectLikeTerms(out);
+                return true;
+            }
+            {
+                BigRational c; ExprPtr f;
+                if (normalizeFactor(e, c, f)) {
+                    PolyTerm t; t.coeff = c;
+                    if (f) t.factors.push_back(std::move(f));
+                    out.push_back(std::move(t));
+                    return true;
+                }
+            }
+            return false;
+        }
+        case Expr::Call:
+        case Expr::Var: {
+            BigRational c; ExprPtr f;
+            if (normalizeFactor(e, c, f)) {
+                PolyTerm t; t.coeff = c;
+                if (f) t.factors.push_back(std::move(f));
+                out.push_back(std::move(t));
+                return true;
+            }
+            return false;
+        }
+        default:
+            return false;
+    }
+}
+
+static ExprPtr polyTermsToExpr(const std::vector<PolyTerm>& terms) {
+    if (terms.empty()) return Expr::makeNumber(BigRational(0));
+    ExprPtr result;
+    for (const auto& t : terms) {
+        ExprPtr term;
+        if (t.factors.empty()) {
+            term = Expr::makeNumber(t.coeff);
+        } else {
+            ExprPtr prod = t.factors[0]->clone();
+            for (size_t i = 1; i < t.factors.size(); ++i)
+                prod = Expr::makeBinary(BinOp::Mul, std::move(prod), t.factors[i]->clone());
+            if (t.coeff == BigRational(1)) {
+                term = std::move(prod);
+            } else if (t.coeff == BigRational(-1)) {
+                term = Expr::makeUnary(UnaryOp::Neg, std::move(prod));
+            } else {
+                term = Expr::makeBinary(BinOp::Mul, Expr::makeNumber(t.coeff), std::move(prod));
+            }
+        }
+        if (!result) result = std::move(term);
+        else result = Expr::makeBinary(BinOp::Add, std::move(result), std::move(term));
+    }
+    return result;
+}
+
+/// 尝试对符号乘法做多项式展开 + 合并同类项。
+static ExprPtr expandSymbolicProduct(const Expr& aExpr, const Expr& bExpr) {
+    std::vector<PolyTerm> la, lb;
+    if (!toPolyTerms(aExpr, la)) return nullptr;
+    if (!toPolyTerms(bExpr, lb)) return nullptr;
+    std::vector<PolyTerm> product;
+    mulPolyTerms(la, lb, product);
+    collectLikeTerms(product);
+    if (product.empty()) return Expr::makeNumber(BigRational(0));
+    if (product.size() == 1 && product[0].factors.empty())
+        return Expr::makeNumber(product[0].coeff);
+    return polyTermsToExpr(product);
+}
+
+// 本地 flatString: 把 AST 转为确定性字符串（用于 collectLikeTerms 的 key）
+static std::string localFlatString(const Expr& e) {
+    switch (e.kind) {
+        case Expr::Number: return e.num.toFraction();
+        case Expr::Var: return e.name;
+        case Expr::SetName: return e.name;
+        case Expr::Unary:
+            return std::string(e.unop == UnaryOp::Neg ? "-" : "+") + localFlatString(*e.lhs);
+        case Expr::Binary:
+            return "(" + localFlatString(*e.lhs) + " " + std::to_string((int)e.binop) + " " + localFlatString(*e.rhs) + ")";
+        case Expr::Call: {
+            std::string s = e.name + "(";
+            for (size_t i = 0; i < e.args.size(); ++i) { if (i) s += ","; s += localFlatString(*e.args[i]); }
+            return s + ")";
+        }
+        default: return "?";
+    }
 }
 
 // ---------------------------------------------------------------------------

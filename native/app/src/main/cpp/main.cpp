@@ -148,10 +148,21 @@ int main(int argc, char** argv) {
     BigFloat::defaultPrecision() = eng.config().precision;
 
 #ifdef SCICALC_WITH_GUI
-    if (wantGui) return runGui(argc, argv, eng);
+    // 当 GUI 编译进二进制时:
+    // - 显式 --gui -> 启动 GUI
+    // - 有表达式参数 -> CLI 求值（便于脚本使用）
+    // - 无参数（如双击运行 GUI 子系统 exe）-> 默认启动 GUI
+    //   （GUI 子系统没有 stdin，REPL 会立即 EOF 退出，所以必须默认弹窗）
+    if (wantGui || positional.empty()) return runGui(argc, argv, eng);
+    // 有表达式参数且未要求 GUI -> CLI 求值
+    {
+        std::string expr = positional[0];
+        EngineResult r = eng.evaluate(expr);
+        printResult(r);
+        return r.ok ? 0 : 1;
+    }
 #else
     if (wantGui) std::cerr << "GUI not built into this binary; using REPL.\n";
-#endif
 
     if (!positional.empty()) {
         std::string expr = positional[0];
@@ -163,4 +174,5 @@ int main(int argc, char** argv) {
     // ':' prefixed lines are commands, everything else is evaluated).
     repl(eng);
     return 0;
+#endif
 }
