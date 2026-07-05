@@ -272,6 +272,9 @@ Value Evaluator::evalSetOp(BinOp op, const SetValuePtr& a, const SetValuePtr& b)
 // power
 // ---------------------------------------------------------------------------
 
+// 前向声明: 符号乘除的 sqrt 合并化简 (定义在 simplifySqrt 之后)
+static ExprPtr simplifySymbolicSqrtProduct(const Expr& aExpr, const Expr& bExpr, BinOp op);
+
 Value Evaluator::powValues(const Value& base, const Value& exp) {
     // integer exponent -> exact rational power (fast exponentiation)
     if (base.isRational() && exp.isRational() && exp.rat.isInteger()) {
@@ -351,6 +354,15 @@ Value Evaluator::evalBinary(BinOp op, const Value& a, const Value& b, const Expr
                                         : Expr::makeNumber(a.toRational());
             ExprPtr lb = b.isSymbolic() ? b.sym->clone()
                                         : Expr::makeNumber(b.toRational());
+            // 乘除: 尝试 sqrt 合并化简 (如 sqrt(2)*sqrt(8)=4, sqrt(2)/sqrt(8)=1/2)
+            if (op == B::Mul || op == B::Div) {
+                ExprPtr simplified = simplifySymbolicSqrtProduct(*la, *lb, op);
+                if (simplified) {
+                    if (simplified->kind == Expr::Number)
+                        return Value::ofRat(simplified->num);
+                    return Value::ofSym(std::move(simplified));
+                }
+            }
             return Value::ofSym(Expr::makeBinary(op, std::move(la), std::move(lb)));
         }
         // both rational -> exact
@@ -434,6 +446,82 @@ static void simplifySqrt(const BigRational& r, BigRational& scale, BigInt& radic
     }
     scale = BigRational(s, q);
     radicand = t;
+}
+
+// 尝试从符号表达式 e 中提取 (有理系数, 根号内整数)。
+// 支持形式: Number(n), sqrt(Number), sqrt(Number)化简形式 c*sqrt(r),
+// 以及这些形式的乘积。返回 false 表示无法提取（含 sin/log 等不可化简符号）。
+static bool extractSqrtFactor(const Expr& e, BigRational& coeff, BigInt& radicand) {
+    if (e.kind == Expr::Number) {
+        coeff = e.num;
+        radicand = BigInt(1);
+        return true;
+    }
+    if (e.kind == Expr::Call && e.name == "sqrt" && e.args.size() == 1 &&
+        e.args[0] && e.args[0]->kind == Expr::Number) {
+        BigRational r = e.args[0]->num;
+        if (r.isNegative()) return false;
+        BigRational scale; BigInt rad;
+        simplifySqrt(r, scale, rad);
+        coeff = scale;
+        radicand = rad;
+        return true;
+    }
+    if (e.kind == Expr::Binary && e.binop == BinOp::Mul && e.lhs && e.rhs) {
+        BigRational c1, c2; BigInt r1, r2;
+        if (extractSqrtFactor(*e.lhs, c1, r1) && extractSqrtFactor(*e.rhs, c2, r2)) {
+            BigRational combinedScale; BigInt combinedRad;
+            simplifySqrt(BigRational(r1 * r2), combinedScale, combinedRad);
+            coeff = c1 * c2 * combinedScale;
+            radicand = combinedRad;
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 尝试对两个符号表达式的乘/除进行 sqrt 合并化简。
+/// 成功返回化简后的 ExprPtr；失败返回 nullptr（调用方保留原样）。
+static ExprPtr simplifySymbolicSqrtProduct(const Expr& aExpr, const Expr& bExpr, BinOp op) {
+    if (op != BinOp::Mul && op != BinOp::Div) return nullptr;
+    BigRational c1, c2; BigInt r1, r2;
+    if (!extractSqrtFactor(aExpr, c1, r1)) return nullptr;
+    if (!extractSqrtFactor(bExpr, c2, r2)) return nullptr;
+    BigRational newCoeff; BigInt newRad;
+    if (op == BinOp::Mul) {
+        newCoeff = c1 * c2;
+        newRad = r1 * r2;
+        // 对乘积的 radicand 再做一次 simplifySqrt，吸收完全平方因子
+        BigRational s3; BigInt r3;
+        simplifySqrt(BigRational(newRad), s3, r3);
+        newCoeff = newCoeff * s3;
+        newRad = r3;
+    } else { // Div
+        if (c2.isZero()) return nullptr; // 让上层报除零错误
+        newCoeff = c1 / c2;
+        newRad = r1;
+        // 除以 sqrt(r2) => 乘以 1/sqrt(r2) = sqrt(1/r2) 的化简
+        // sqrt(r1)/sqrt(r2) = sqrt(r1/r2)。用 r1 * (1/r2) 但 r2 是整数。
+        // 更简单: newRad = r1, 再除以 r2 -> sqrt(r1/r2)。用 r1 * q_den? 
+        // r2 是 BigInt 整数。sqrt(r1)/sqrt(r2) = sqrt(r1/r2) 但 r1/r2 可能不是整数。
+        // 直接: 把 1/r2 作为有理数, simplifySqrt(BigRational(1, r2)) 给出 1/sqrt(r2) 的化简。
+        BigRational invR2(BigInt(1), r2);
+        BigRational scale2; BigInt rad2;
+        simplifySqrt(invR2, scale2, rad2);
+        // newRad = r1 * rad2, newCoeff *= scale2
+        newRad = r1 * rad2;
+        newCoeff = newCoeff * scale2;
+        // 再对 newRad 做一次 simplifySqrt（吸收完全平方因子）
+        BigRational s3; BigInt r3;
+        simplifySqrt(BigRational(newRad), s3, r3);
+        newCoeff = newCoeff * s3;
+        newRad = r3;
+    }
+    if (newRad == BigInt(1)) return Expr::makeNumber(newCoeff);
+    ExprPtr sqrtNode = Expr::makeCall("sqrt", Expr::makeNumber(BigRational(newRad)));
+    if (newCoeff == BigRational(1)) return sqrtNode;
+    if (newCoeff == BigRational(-1)) return Expr::makeUnary(UnaryOp::Neg, std::move(sqrtNode));
+    return Expr::makeBinary(BinOp::Mul, Expr::makeNumber(newCoeff), std::move(sqrtNode));
 }
 
 // ---------------------------------------------------------------------------

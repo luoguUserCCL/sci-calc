@@ -182,3 +182,163 @@ tasks.register('buildLinuxGui', Exec) {
     doFirst { distDir.mkdirs() }
     doLast { println "Built Linux GUI exe -> ${out}" }
 }
+
+// -----------------------------------------------------------------------------
+// Windows GUI build (Dear ImGui + GLFW-from-source + OpenGL3/WGL).
+// 用 MinGW-w64 ucrt64 交叉编译，GLFW 从源码编译进可执行文件。
+// -mwindows 使链接器生成 GUI 子系统程序（不弹控制台窗口）。
+// -----------------------------------------------------------------------------
+def glfwSrcDir = "${thirdParty}/glfw/src"
+// GLFW 平台无关源文件
+def glfwCommonSrcs = [
+    "${glfwSrcDir}/context.c", "${glfwSrcDir}/init.c", "${glfwSrcDir}/input.c",
+    "${glfwSrcDir}/monitor.c", "${glfwSrcDir}/vulkan.c", "${glfwSrcDir}/window.c",
+    "${glfwSrcDir}/egl_context.c", "${glfwSrcDir}/osmesa_context.c", "${glfwSrcDir}/platform.c",
+    "${glfwSrcDir}/null_init.c", "${glfwSrcDir}/null_joystick.c",
+    "${glfwSrcDir}/null_monitor.c", "${glfwSrcDir}/null_window.c"
+]
+// GLFW Win32 平台源文件
+def glfwWin32Srcs = [
+    "${glfwSrcDir}/win32_init.c", "${glfwSrcDir}/win32_joystick.c", "${glfwSrcDir}/win32_module.c",
+    "${glfwSrcDir}/win32_monitor.c", "${glfwSrcDir}/win32_thread.c", "${glfwSrcDir}/win32_time.c",
+    "${glfwSrcDir}/win32_window.c", "${glfwSrcDir}/wgl_context.c"
+]
+
+tasks.register('buildWindowsGui') {
+    group = 'sci-calc'
+    description = 'Cross-compile the Windows GUI executable (ImGui + GLFW source + WGL, -mwindows).'
+    def out = new File(distDir, 'sci-calc-windows-gui.exe')
+    def mingwGcc = sciCalcTools.windowsMingw.cc   // C 编译器
+    def mingwGxx = sciCalcTools.windowsMingw.cxx  // C++ 编译器
+    def objDir = new File(distDir, 'obj/windows-gui')
+    // GLFW .c 用 C 编译器编译为 .o; 其余 .cpp 用 C++ 编译器; 最后链接。
+    def glfwSrcList = glfwCommonSrcs + glfwWin32Srcs
+    doFirst {
+        distDir.mkdirs(); objDir.mkdirs()
+        // 1. 编译 GLFW C 源文件
+        glfwSrcList.each { src ->
+            def obj = new File(objDir, (src - "${thirdParty}/glfw/src/").replace('/', '_').replace('.c', '.o'))
+            exec {
+                executable mingwGcc
+                args '-c', '-O2', '-D_GLFW_WIN32', '-I', "${thirdParty}/glfw/include",
+                    '-I', glHdr, src, '-o', obj.absolutePath
+                environment 'PATH', "${sciCalcTools.windowsMingw.path}:${System.env.PATH}"
+            }
+        }
+        // 2. 编译 C++ 源文件 (engine + app + imgui)
+        def cppSrcs = guiSrcs.collect { it.absolutePath } + imguiSrcs
+        cppSrcs.each { src ->
+            def obj = new File(objDir, (new File(src).name).replace('.cpp', '.o'))
+            exec {
+                executable mingwGxx
+                args '-c', '-std=c++20', '-O2', '-Wall', '-Wno-unused-parameter',
+                    '-DSCICALC_WITH_GUI',
+                    '-I', engineHdrDir.absolutePath, '-I', imguiDir, '-I', "${imguiDir}/backends",
+                    '-I', "${thirdParty}/glfw/include", '-I', glHdr,
+                    src, '-o', obj.absolutePath
+                environment 'PATH', "${sciCalcTools.windowsMingw.path}:${System.env.PATH}"
+            }
+        }
+        // 3. 链接: 所有 .o + -mwindows + 系统库
+        def allObjs = objDir.listFiles()?.findAll { it.name.endsWith('.o') }?.collect { it.absolutePath } ?: []
+        exec {
+            executable mingwGxx
+            args(*allObjs, '-o', out.absolutePath,
+                 '-mwindows', '-static', '-static-libgcc', '-static-libstdc++',
+                 '-lopengl32', '-lgdi32', '-luser32', '-lshell32', '-ldwmapi', '-luxtheme',
+                 '-lwinpthread', '-limm32', '-lole32', '-lsetupapi')
+            environment 'PATH', "${sciCalcTools.windowsMingw.path}:${System.env.PATH}"
+        }
+    }
+    inputs.files guiSrcs; inputs.files imguiSrcs; inputs.files files(glfwSrcList)
+    outputs.file out
+    doLast { println "Built Windows GUI exe -> ${out}" }
+}
+
+// -----------------------------------------------------------------------------
+// macOS GUI build (Dear ImGui + GLFW-from-source + OpenGL3/NSGL).
+// 用 Zig cc 交叉编译，GLFW Cocoa 后端的 .m (Objective-C) 文件由 Zig 内置
+// clang 处理。链接 Cocoa/OpenGL/IOKit 等 framework。
+// -----------------------------------------------------------------------------
+def glfwCocoaSrcs = [
+    "${glfwSrcDir}/cocoa_init.m", "${glfwSrcDir}/cocoa_joystick.m",
+    "${glfwSrcDir}/cocoa_monitor.m", "${glfwSrcDir}/cocoa_window.m",
+    "${glfwSrcDir}/cocoa_time.c", "${glfwSrcDir}/nsgl_context.m",
+    // Cocoa 后端依赖 POSIX 线程/模块/时间/轮询
+    "${glfwSrcDir}/posix_thread.c", "${glfwSrcDir}/posix_module.c",
+    "${glfwSrcDir}/posix_time.c", "${glfwSrcDir}/posix_poll.c"
+]
+// macOS SDK (含 Cocoa/AppKit 等 framework headers)，用于 Zig 交叉编译 Cocoa 后端
+def macosSdk = "${toolsDir}/MacOSX11.3.sdk"
+def macosSdkAvailable = file(macosSdk).exists()
+
+tasks.register('buildMacosGui') {
+    group = 'sci-calc'
+    description = 'Cross-compile the macOS GUI executable (ImGui + GLFW source + NSGL, Zig + macOS SDK).'
+    enabled = zigAvailable && macosSdkAvailable
+    def out = new File(distDir, 'sci-calc-macos-gui')
+    def zig = zigBinPath
+    def objDir = new File(distDir, 'obj/macos-gui')
+    def glfwSrcList = glfwCommonSrcs + glfwCocoaSrcs
+    doFirst {
+        distDir.mkdirs(); objDir.mkdirs()
+        // 1. 编译 GLFW C/.m 源文件 (含 Cocoa ObjC .m)
+        glfwSrcList.each { src ->
+            def obj = new File(objDir, (src - "${thirdParty}/glfw/src/").replace('/', '_').replaceFirst(/\.(c|m)$/, '.o'))
+            exec {
+                executable zig
+                args 'c++', '-target', 'x86_64-macos',
+                    '-c', '-O2', '-D_GLFW_COCOA',
+                    '-isysroot', macosSdk,
+                    '-iframework', "${macosSdk}/System/Library/Frameworks",
+                    '-I', "${thirdParty}/glfw/include", '-I', glHdr,
+                    '-I', "${macosSdk}/usr/include",
+                    src, '-o', obj.absolutePath
+            }
+        }
+        // 2. 编译 C++ 源文件 (engine + app + imgui)
+        // -isystem (而非 -I) 指向 SDK usr/include: 优先级低于 libc++，不干扰 C++ 标准库搜索顺序，
+        // 但能让 framework headers 间接 include 的 <libDER/...> 等被找到。
+        def cppSrcs = guiSrcs.collect { it.absolutePath } + imguiSrcs
+        cppSrcs.each { src ->
+            def obj = new File(objDir, (new File(src).name).replace('.cpp', '.o'))
+            exec {
+                executable zig
+                args 'c++', '-target', 'x86_64-macos',
+                    '-c', '-std=c++20', '-O2', '-Wall', '-Wno-unused-parameter',
+                    '-DSCICALC_WITH_GUI',
+                    '-isysroot', macosSdk,
+                    '-iframework', "${macosSdk}/System/Library/Frameworks",
+                    '-isystem', "${macosSdk}/usr/include",
+                    '-I', engineHdrDir.absolutePath, '-I', imguiDir, '-I', "${imguiDir}/backends",
+                    '-I', "${thirdParty}/glfw/include", '-I', glHdr,
+                    src, '-o', obj.absolutePath
+            }
+        }
+        // 3. 链接: .o + frameworks
+        // 注意: 链接时不传 -isysroot (Zig 0.17-dev 的 lld 在 -isysroot + 多 .o + framework
+        // 时会 segfault)。改用 -F 指定 framework 搜索路径，-L 指定库路径。
+        def allObjs = objDir.listFiles()?.findAll { it.name.endsWith('.o') }?.collect { it.absolutePath } ?: []
+        exec {
+            executable zig
+            args 'c++', '-target', 'x86_64-macos',
+                *allObjs, '-o', out.absolutePath,
+                '-F', "${macosSdk}/System/Library/Frameworks",
+                '-L', "${macosSdk}/usr/lib",
+                '-framework', 'Cocoa', '-framework', 'OpenGL',
+                '-framework', 'IOKit', '-framework', 'CoreFoundation',
+                '-framework', 'CoreVideo', '-framework', 'AppKit',
+                '-framework', 'Foundation', '-lobjc.A'
+        }
+    }
+    inputs.files guiSrcs; inputs.files imguiSrcs; inputs.files files(glfwSrcList)
+    outputs.file out
+    doLast { println "Built macOS GUI exe -> ${out}" }
+}
+
+// 聚合: 构建全部 GUI 版本
+tasks.register('buildAllGui') {
+    group = 'sci-calc'
+    description = 'Build GUI executables for all platforms.'
+    dependsOn 'buildLinuxGui', 'buildWindowsGui', 'buildMacosGui'
+}
