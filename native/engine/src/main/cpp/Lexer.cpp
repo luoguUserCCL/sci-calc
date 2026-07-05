@@ -15,6 +15,8 @@ static const std::unordered_map<std::string, TokKind> kKeywords = {
     {"realsubset", TokKind::KW_realsubset},
     {"cap", TokKind::KW_cap},
     {"cup", TokKind::KW_cup},
+    {"cong", TokKind::KW_cong},
+    {"mod", TokKind::KW_mod},
     {"real", TokKind::KW_Real},
     {"reals", TokKind::KW_Real},
     {"rational", TokKind::KW_Rational},

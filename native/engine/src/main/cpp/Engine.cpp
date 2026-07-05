@@ -29,6 +29,7 @@ static std::string flatOp(BinOp op) {
         case BinOp::In: return " \xE2\x88\x88 ";
         case BinOp::Subset: return " \xE2\x8A\x86 ";
         case BinOp::RealSubset: return " \xE2\x8A\x8A ";
+        case BinOp::Cong: return " \xE2\x89\xA1 "; // ≡
         case BinOp::And: return " \xE2\x88\xA7 ";
         case BinOp::Or: return " \xE2\x88\xA8 ";
         case BinOp::Assign: return " := ";
@@ -56,6 +57,10 @@ static std::string flatString(const Expr& e) {
                 return flatString(*e.lhs) + "^(" + flatString(*e.rhs) + ")";
             return "(" + flatString(*e.lhs) + flatOp(e.binop) + flatString(*e.rhs) + ")";
         case Expr::Call: {
+            // 同余: cong(a,b,m) -> a ≡ b (mod m)
+            if (e.name == "cong" && e.args.size() == 3)
+                return flatString(*e.args[0]) + " \xE2\x89\xA1 " + flatString(*e.args[1]) +
+                       " (mod " + flatString(*e.args[2]) + ")";
             std::string s = e.name + "(";
             for (size_t i = 0; i < e.args.size(); ++i) { if (i) s += ", "; s += flatString(*e.args[i]); }
             return s + ")";

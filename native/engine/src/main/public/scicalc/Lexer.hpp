@@ -18,6 +18,7 @@ enum class TokKind {
     // keywords (mapped from Ident when reserved)
     KW_and, KW_or, KW_not, KW_in, KW_subset, KW_realsubset,
     KW_cap, KW_cup,
+    KW_cong, KW_mod,   // 同余: a cong b (mod x)
     KW_Real, KW_Rational, KW_Quotient, KW_Integer, KW_Zahlen,
     End,
 };

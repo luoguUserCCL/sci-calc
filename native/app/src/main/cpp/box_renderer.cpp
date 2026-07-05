@@ -50,7 +50,7 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
             if (doDraw) {
                 ImGui::PushFont(f);
                 ImGui::SetWindowFontScale(1.0f);
-                dl->AddText(f, fontSize_, ImVec2(x, y), IM_COL32(20, 20, 30, 255), s.c_str());
+                dl->AddText(f, fontSize_, ImVec2(x, y), IM_COL32(0, 0, 0, 255), s.c_str());
                 ImGui::PopFont();
             }
             break;
@@ -98,7 +98,7 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
                 layout(*b.num, x + (w - nm.width) / 2, numY, true);
                 layout(*b.den, x + (w - dm.width) / 2, denY, true);
                 float barY = y + numH + barGap;
-                dl->AddLine(ImVec2(x, barY), ImVec2(x + w, barY), IM_COL32(20, 20, 30, 255), 1.5f);
+                dl->AddLine(ImVec2(x, barY), ImVec2(x + w, barY), IM_COL32(0, 0, 0, 255), 1.5f);
             }
             break;
         }
@@ -134,64 +134,82 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
             break;
         }
         case Box::Radical: {
+            // 自绘根号: 钩 + 横线 (不依赖字体的 √ 字形, 避免缺字/残缺)
             BoxMetrics rm = layout(*b.radicand, x, y, false);
-            float radSymW = fontSize_ * 0.6f;
+            float radSymW = fontSize_ * 0.5f;
+            float radHookH = fontSize_ * 0.6f;
+            float barY = y;  // 横线在 radicand 顶部
             float w = radSymW + rm.width + 4.0f;
             m.width = w;
-            m.height = rm.height + 2.0f;
-            m.ascent = rm.ascent + 2.0f;
+            m.height = rm.height + radHookH * 0.3f;
+            m.ascent = rm.ascent + radHookH * 0.3f;
             m.descent = rm.descent;
             if (doDraw) {
-                ImFont* f = fallback(math_, ImGui::GetFont());
-                ImGui::PushFont(f);
-                dl->AddText(f, fontSize_, ImVec2(x, y), IM_COL32(20,20,30,255), "\xE2\x88\x9A"); // √
-                ImGui::PopFont();
-                layout(*b.radicand, x + radSymW + 2, y, true);
-                // overline
-                dl->AddLine(ImVec2(x + radSymW, y - 1), ImVec2(x + radSymW + rm.width + 2, y - 1),
-                            IM_COL32(20,20,30,255), 1.0f);
+                float hookX = x;
+                float hookTopY = barY + radHookH * 0.3f;  // 钩的底部
+                float hookMidY = barY - radHookH * 0.2f;  // 钩中部
+                float lineThick = std::max(1.5f, fontSize_ * 0.08f);
+                ImU32 col = IM_COL32(0, 0, 0, 255);  // 纯黑, 高对比度
+                // 根号钩: 从左下到中点再向上到横线
+                dl->AddLine(ImVec2(hookX, hookTopY), ImVec2(hookX + radSymW * 0.4f, hookMidY),
+                            col, lineThick);
+                dl->AddLine(ImVec2(hookX + radSymW * 0.4f, hookMidY), ImVec2(hookX + radSymW, barY),
+                            col, lineThick);
+                // 横线 (覆盖 radicand)
+                dl->AddLine(ImVec2(hookX + radSymW, barY),
+                            ImVec2(hookX + radSymW + rm.width + 2, barY),
+                            col, lineThick);
+                layout(*b.radicand, x + radSymW + 2, y + radHookH * 0.3f, true);
             }
             break;
         }
         case Box::BigOp: {
-            // symbol centered, lower/upper limits stacked, body to the right
+            // 求和/连乘: 符号居中, 上限在正上方, 下限在正下方, body 在右侧
             ImFont* f = fallback(math_, ImGui::GetFont());
-            float symH = fontSize_ * 1.4f;
-            float symW = textWidth(b.opSymbol, f) * 1.4f + 4;
-            float limitsW = 0, limitsH = 0;
-            float loW = 0, hiW = 0;
-            if (b.lower) { BoxMetrics lm = layout(*b.lower, x, y, false); loW = lm.width; }
-            if (b.upper) { BoxMetrics um = layout(*b.upper, x, y, false); hiW = um.width; }
-            limitsW = std::max(loW, hiW);
-            limitsH = (b.lower ? 1 : 0) + (b.upper ? 1 : 0) ? fontSize_ * 1.1f : 0;
+            float symSize = fontSize_ * 1.8f;
+            float symW = textWidth(b.opSymbol, f) * 1.5f + 4;
+            float symH = symSize;
+            float loW = 0, hiW = 0, loH = 0, hiH = 0;
+            float smallSize = fontSize_ * 0.6f;
+            if (b.lower) {
+                float old = fontSize_; fontSize_ = smallSize;
+                BoxMetrics lm = layout(*b.lower, x, y, false); loW = lm.width; loH = lm.height;
+                fontSize_ = old;
+            }
+            if (b.upper) {
+                float old = fontSize_; fontSize_ = smallSize;
+                BoxMetrics um = layout(*b.upper, x, y, false); hiW = um.width; hiH = um.height;
+                fontSize_ = old;
+            }
+            float opBlockW = std::max(symW, std::max(loW, hiW));
+            float opBlockH = hiH + symH + loH;
             float bodyW = 0, bodyH = fontSize_;
             if (b.body) { BoxMetrics bm = layout(*b.body, x, y, false); bodyW = bm.width; bodyH = bm.height; }
-            float opBlockW = std::max(symW, limitsW);
             m.width = opBlockW + 6 + bodyW;
-            m.height = std::max(symH + limitsH, bodyH);
-            m.ascent = m.height * 0.7f; m.descent = m.height * 0.3f;
+            m.height = std::max(opBlockH, bodyH);
+            m.ascent = m.height * 0.6f; m.descent = m.height * 0.4f;
             if (doDraw) {
-                ImGui::PushFont(f);
-                float symY = y + (m.height - symH) / 2;
-                dl->AddText(f, fontSize_ * 1.2f, ImVec2(x + (opBlockW - symW)/2, symY),
-                            IM_COL32(20,20,30,255), b.opSymbol.c_str());
-                ImGui::PopFont();
-                float smallSize = fontSize_ * 0.7f;
+                ImU32 col = IM_COL32(0, 0, 0, 255);
                 float cy = y;
-                float oldSize = fontSize_;
+                // 上限 (正上方)
                 if (b.upper) {
-                    fontSize_ = smallSize;
-                    BoxMetrics um = layout(*b.upper, x + (opBlockW - hiW)/2, cy, true);
-                    cy += um.height;
-                    fontSize_ = oldSize;
+                    float old = fontSize_; fontSize_ = smallSize;
+                    layout(*b.upper, x + (opBlockW - hiW)/2, cy, true);
+                    fontSize_ = old;
+                    cy += hiH;
                 }
-                // symbol occupies middle
-                cy = y + symH;
+                // 符号 (居中)
+                ImGui::PushFont(f);
+                dl->AddText(f, symSize, ImVec2(x + (opBlockW - symW)/2, cy), col, b.opSymbol.c_str());
+                ImGui::PopFont();
+                cy += symH;
+                // 下限 (正下方)
                 if (b.lower) {
-                    fontSize_ = smallSize;
+                    float old = fontSize_; fontSize_ = smallSize;
                     layout(*b.lower, x + (opBlockW - loW)/2, cy, true);
-                    fontSize_ = oldSize;
+                    fontSize_ = old;
                 }
+                // body 在右侧垂直居中
                 if (b.body) layout(*b.body, x + opBlockW + 6, y + (m.height - bodyH)/2, true);
             }
             break;
@@ -210,13 +228,13 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
             if (doDraw) {
                 if (!b.leftDelim.empty()) {
                     ImGui::PushFont(f);
-                    dl->AddText(f, fontSize_, ImVec2(x, y), IM_COL32(20,20,30,255), b.leftDelim.c_str());
+                    dl->AddText(f, fontSize_, ImVec2(x, y), IM_COL32(0,0,0,255), b.leftDelim.c_str());
                     ImGui::PopFont();
                 }
                 layout(inner, x + lW + 2, y, true);
                 if (!b.rightDelim.empty()) {
                     ImGui::PushFont(f);
-                    dl->AddText(f, fontSize_, ImVec2(x + lW + im.width + 2, y), IM_COL32(20,20,30,255), b.rightDelim.c_str());
+                    dl->AddText(f, fontSize_, ImVec2(x + lW + im.width + 2, y), IM_COL32(0,0,0,255), b.rightDelim.c_str());
                     ImGui::PopFont();
                 }
             }
@@ -233,7 +251,7 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
             m.ascent = m.height * 0.8f; m.descent = m.height * 0.2f;
             if (doDraw) {
                 ImGui::PushFont(f);
-                dl->AddText(f, fontSize_, ImVec2(cx, y), IM_COL32(20,20,30,255), b.funcName.c_str());
+                dl->AddText(f, fontSize_, ImVec2(cx, y), IM_COL32(0,0,0,255), b.funcName.c_str());
                 ImGui::PopFont();
                 cx += nameW;
                 if (b.funcSub) {

@@ -17,6 +17,7 @@ enum class BinOp {
     In,             // in
     Subset,         // subset (subseteq)
     RealSubset,     // realsubset (subsetneq)
+    Cong,           // cong (同余 ≡, 必须带 (mod x))
     And, Or,
     Assign,         // :=
 };

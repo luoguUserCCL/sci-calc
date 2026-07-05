@@ -30,7 +30,8 @@ private:
     ExprPtr parseAssign();        // :=                  (right, level 10)
     ExprPtr parseLogicOr();       // or                  (left, level 9)
     ExprPtr parseLogicAnd();      // and                 (left, level 9)
-    ExprPtr parseRelational();    // = != < > <= >= in subset realsubset (chainable, level 8)
+    ExprPtr parseRelational();    // = != < > <= >= in subset realsubset cong (chainable, level 8)
+    ExprPtr parseRelationalRest(ExprPtr first);  // cong 回退后的普通关系链
     ExprPtr parseSetOps();        // cap cup \           (left, level 7)
     ExprPtr parseAddSub();        // + -                 (left, level 6)
     ExprPtr parseMulDiv();        // * / %               (left, level 5)

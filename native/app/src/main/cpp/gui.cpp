@@ -222,7 +222,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
 
         // --- Input area ---
         ImGui::Text("Math input:");
-        ImGui::PushItemWidth(-120);
+        ImGui::PushItemWidth(-200);
         bool submitted = ImGui::InputText("##input", inputBuf, sizeof(inputBuf),
             ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::PopItemWidth();
@@ -234,49 +234,58 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
                 lastOutput = r.ok ? r.output : "";
                 lastError = r.ok ? "" : r.error;
                 lastTree = std::move(r.renderTree);
-                // build input echo tree
-                try {
-                    Lexer lex(expr); Parser p(lex.tokenize());
-                    ExprPtr ast = p.parse();
-                    inputTree = buildInputBox(*ast);
-                } catch (...) { inputTree.reset(); }
                 history.push_back({expr, r.ok ? r.output : ("error: " + r.error), r.ok});
-                inputBuf[0] = '\0';
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Clear")) { inputBuf[0]='\0'; lastOutput.clear(); lastError.clear(); lastTree.reset(); inputTree.reset(); }
+        if (ImGui::Button("Clear")) { inputBuf[0]='\0'; lastOutput.clear(); lastError.clear(); lastTree.reset(); }
+
+        // 实时渲染: 每帧根据 inputBuf 重建 inputTree (输入时即时看到公式)
+        {
+            std::string expr(inputBuf);
+            if (!expr.empty()) {
+                try {
+                    Lexer lex(expr); Parser p(lex.tokenize());
+                    ExprPtr ast = p.parse();
+                    if (p.fullyConsumed()) inputTree = buildInputBox(*ast);
+                    else inputTree.reset();
+                } catch (...) { inputTree.reset(); }
+            } else {
+                inputTree.reset();
+            }
+        }
 
         // --- Formula render area (input echo + result) ---
         ImGui::Separator();
         ImGui::Text("Formula rendering:");
         ImVec2 area = ImGui::GetContentRegionAvail();
-        float renderH = area.y * 0.45f;
+        float renderH = area.y * 0.5f;
         ImVec2 rp = ImGui::GetCursorScreenPos();
         ImVec2 rs = ImVec2(area.x, renderH);
         ImGui::InvisibleButton("##render", rs);
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddRectFilled(rp, ImVec2(rp.x + rs.x, rp.y + rs.y), IM_COL32(250, 250, 252, 255));
-        dl->AddRect(rp, ImVec2(rp.x + rs.x, rp.y + rs.y), IM_COL32(180, 180, 190, 255));
+        // 纯白背景, 高对比度
+        dl->AddRectFilled(rp, ImVec2(rp.x + rs.x, rp.y + rs.y), IM_COL32(255, 255, 255, 255));
+        dl->AddRect(rp, ImVec2(rp.x + rs.x, rp.y + rs.y), IM_COL32(100, 100, 110, 255));
         // draw input echo + result stacked
-        float curY = rp.y + 12;
+        float curY = rp.y + 16;
         if (inputTree) {
             ImGui::PushFont(mathFont);
-            renderer.setScale(22.0f);
-            float used = renderer.draw(*inputTree, rp.x + 16, curY);
+            renderer.setScale(30.0f);  // 增大字号
+            float used = renderer.draw(*inputTree, rp.x + 20, curY);
             (void)used;
             ImGui::PopFont();
             auto im = renderer.measure(*inputTree);
-            curY += im.height + 18;
+            curY += im.height + 24;
         }
         if (lastTree) {
             ImGui::PushFont(mathFont);
-            renderer.setScale(26.0f);
-            renderer.draw(*lastTree, rp.x + 16, curY);
+            renderer.setScale(34.0f);  // 结果更大
+            renderer.draw(*lastTree, rp.x + 20, curY);
             ImGui::PopFont();
         } else if (!lastOutput.empty()) {
             ImGui::PushFont(mathFont);
-            dl->AddText(mathFont, 24, ImVec2(rp.x + 16, curY), IM_COL32(20, 20, 30, 255), lastOutput.c_str());
+            dl->AddText(mathFont, 32, ImVec2(rp.x + 20, curY), IM_COL32(0, 0, 0, 255), lastOutput.c_str());
             ImGui::PopFont();
         }
 

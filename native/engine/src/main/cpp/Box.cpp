@@ -57,6 +57,7 @@ static const char* opSymbol(BinOp op) {
         case BinOp::In: return "\xE2\x88\x88"; // ∈
         case BinOp::Subset: return "\xE2\x8A\x86"; // ⊆
         case BinOp::RealSubset: return "\xE2\x8A\x8A"; // ⊊
+        case BinOp::Cong: return "\xE2\x89\xA1"; // ≡
         case BinOp::And: return "\xE2\x88\xA7"; // ∧
         case BinOp::Or: return "\xE2\x88\xA8";  // ∨
         case BinOp::Assign: return ":=";
@@ -133,6 +134,17 @@ BoxPtr buildInputBox(const Expr& e) {
                 std::vector<BoxPtr> row;
                 row.push_back(Box::makeText("\xE2\x84\x9D", Box::Symbol)); // 𝕀-ish; use ℝ-styled? Use I
                 row.push_back(Box::makeDelimited("(", ")", buildInputBox(*e.args[0])));
+                return Box::makeRow(std::move(row));
+            }
+            // 同余: cong(a, b, m) -> a ≡ b (mod m)
+            if (n == "cong" && e.args.size() == 3) {
+                std::vector<BoxPtr> row;
+                row.push_back(buildInputBox(*e.args[0]));
+                row.push_back(Box::makeText(" \xE2\x89\xA1 ", Box::Operator)); // ≡
+                row.push_back(buildInputBox(*e.args[1]));
+                row.push_back(Box::makeText(" (mod ", Box::Normal));
+                row.push_back(buildInputBox(*e.args[2]));
+                row.push_back(Box::makeText(")", Box::Normal));
                 return Box::makeRow(std::move(row));
             }
             // generic function: name(arg, ...)

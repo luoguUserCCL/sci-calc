@@ -92,12 +92,59 @@ ExprPtr Parser::parseLogicAnd() {
 }
 
 // level 8: relational (chainable: a < b < c => (a<b) and (b<c))
+// 也处理 cong 链: a cong b cong c (mod x)  — 必须以 (mod x) 结尾
 ExprPtr Parser::parseRelational() {
-    ExprPtr left = parseSetOps();
-    // collect a chain of relational operators
+    // 先尝试 cong 链: parse第一个操作数, 若紧跟 cong 则进入 cong 模式
+    {
+        size_t save = pos_;
+        ExprPtr first = parseSetOps();
+        if (cur().kind == TokKind::KW_cong) {
+            // 收集 cong 链: first cong second cong third ... (mod x)
+            std::vector<ExprPtr> operands;
+            operands.push_back(std::move(first));
+            while (cur().kind == TokKind::KW_cong) {
+                ++pos_;
+                operands.push_back(parseSetOps());
+            }
+            // 必须有 (mod x)
+            if (cur().kind != TokKind::LParen) {
+                // 不是 (mod x) — 回退当作普通关系式
+                // 但 operands 已消耗, 无法简单回退。这里报错更合理。
+                throw std::invalid_argument("Parse error: 'cong' chain must end with '(mod x)'");
+            }
+            ++pos_; // (
+            if (cur().kind != TokKind::KW_mod)
+                throw std::invalid_argument("Parse error: expected 'mod' after '(' in congruence");
+            ++pos_;
+            ExprPtr modulus = parseAssign();
+            if (cur().kind != TokKind::RParen)
+                throw std::invalid_argument("Parse error: expected ')' after mod expression");
+            ++pos_; // )
+            // 构造: (a cong b) and (b cong c) and ... 全部 mod x
+            // 用 Cong BinOp, rhs 是一个 Binary(Cong, lhs, modulus) 的特殊标记?
+            // 简化: 每个 cong 对存为 Binary(Cong, pair, modulus), 链式用 And 连接。
+            // 但 Cong 需要知道两个操作数。用 Call("cong", a, b, mod) 更清晰。
+            ExprPtr result;
+            for (size_t i = 1; i < operands.size(); ++i) {
+                std::vector<ExprPtr> args;
+                args.push_back(operands[i-1]->clone());
+                args.push_back(operands[i]->clone());
+                args.push_back(modulus->clone());
+                ExprPtr c = Expr::makeCall("cong", std::move(args));
+                result = result ? Expr::makeBinary(BinOp::And, std::move(result), std::move(c)) : std::move(c);
+            }
+            return result;
+        }
+        // 不是 cong, 回退已 parse 的 first, 继续普通 relational
+        // 注意: first 已 parse, 不能回退。把它作为 chain[0]。
+        return parseRelationalRest(std::move(first));
+    }
+}
+
+ExprPtr Parser::parseRelationalRest(ExprPtr first) {
     struct Op { BinOp b; ExprPtr node; };
     std::vector<Op> chain;
-    chain.push_back({BinOp::Add, std::move(left)});
+    chain.push_back({BinOp::Add, std::move(first)});
     while (true) {
         BinOp b;
         switch (cur().kind) {
@@ -195,6 +242,8 @@ ExprPtr Parser::parsePostfix() {
     ExprPtr node = parsePrimary();
     while (true) {
         if (cur().kind == TokKind::LParen) {
+            // 不把 "(mod ...)" 当函数调用 — cong 同余语法需要
+            if (peek(1).kind == TokKind::KW_mod) break;
             // function call
             ++pos_; // (
             std::vector<ExprPtr> args;

@@ -991,6 +991,20 @@ Value Evaluator::builtin(const std::string& name, const std::vector<Value>& args
         need(1);
         return Value::ofRat(BigRational(truthy(args[0]) ? 1 : 0));
     }
+    // 同余: cong(a, b, mod) => a ≡ b (mod m)  即 (a - b) % m == 0
+    if (name == "cong") {
+        need(3);
+        BigRational a = args[0].toRational(), b = args[1].toRational(), m = args[2].toRational();
+        if (m.isZero()) throw std::runtime_error("cong: modulus is zero");
+        // 要求整数同余
+        if (!a.isInteger() || !b.isInteger() || !m.isInteger())
+            throw std::runtime_error("cong: operands and modulus must be integers");
+        BigInt diff = a.num() - b.num();
+        BigInt mm = m.num();
+        if (mm.isNegative()) mm = -mm;
+        BigInt q, r; BigInt::divmod(diff, mm, q, r);
+        return Value::ofBool(r.isZero());
+    }
     throw std::runtime_error("unknown function: " + name);
 }
 
