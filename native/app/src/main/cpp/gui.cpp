@@ -29,12 +29,38 @@
   #include <windows.h>   // MessageBoxA
 #endif
 
-// 内嵌字体（Latin Modern Math + Noto Sans SC 子集）
-#include "embedded/latinmodern_math.h"
-#include "embedded/noto_sans_sc.h"
-#include "embedded/noto_sans_sc_ranges.h"
+// 内嵌 KaTeX 数学字体 (用于公式渲染)
+#include "embedded/katex_main.h"
+#include "embedded/katex_ams.h"
+#include "embedded/katex_size1.h"
 
 using namespace scicalc;
+
+// 查找系统 UI 字体路径 (Windows=微软雅黑, Linux=Noto Sans SC, macOS=苹方)
+static const char* findSystemUIFont() {
+#ifdef _WIN32
+    return "C:\\Windows\\Fonts\\msyh.ttc";      // Microsoft YaHei
+#elif defined(__APPLE__)
+    return "/System/Library/Fonts/PingFang.ttc"; // PingFang SC
+#else
+    // Linux: 尝试多个常见中文字体路径
+    const char* candidates[] = {
+        "/usr/share/fonts/truetype/noto/NotoSansSC-Regular.otf",
+        "/usr/share/fonts/truetype/noto-serif-sc/NotoSerifSC-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/chinese/SarasaMonoSC-Regular.ttf",
+        "/usr/share/fonts/truetype/lxgw-wenkai/LXGWWenKai-Light.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        nullptr
+    };
+    for (auto* p : candidates) {
+        std::ifstream f(p, std::ios::binary);
+        if (f.good()) return p;
+    }
+    return nullptr;
+#endif
+}
 
 static int runGuiImpl(int argc, char** argv, Engine& engine);
 
@@ -108,53 +134,64 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // 字体: 内嵌 Latin Modern Math (数学符号) + Noto Sans SC (中英文 UI)。
-    // 两个字体都从编译进二进制的字节数组加载，无需任何外部文件。
+    // 字体策略:
+    // - UI 字体: 系统默认 (Windows=微软雅黑, Linux=Noto Sans SC, macOS=苹方)
+    // - 数学渲染字体: 内嵌 KaTeX 字体 (Main + AMS + Size1)
     ImFont* mainFont = io.Fonts->AddFontDefault();
     ImFont* mathFont = mainFont;
     ImFont* uiFont = mainFont;
-    // 加载 Noto Sans SC (中英文 UI) 作为主字体
+
+    // 1. 加载系统 UI 字体 (含中文, 26px)
     static const ImWchar uiRanges[] = {
         0x0020, 0x00FF, // Basic Latin + Latin-1
         0x0100, 0x017F, // Latin Extended-A
+        0x2000, 0x206F, // General Punctuation
         0x3000, 0x303F, // CJK punctuation
-        0x4E00, 0x5000, // CJK 常用
+        0x4E00, 0x9FFF, // CJK 统一表意文字
         0xFF00, 0xFFEF, // halfwidth/fullwidth
         0,
     };
-    // 加载 Noto Sans SC (中英文 UI) 作为主字体
-    // glyph_ranges 精确匹配子集字体中包含的字形 (从 noto_sans_sc_ranges.h)
-    static ImWchar uiRangesExact[1024];
-    int ri = 0;
-    for (unsigned int i = 0; i < kNotoSansSCRangeCount && ri < 1022; ++i) {
-        uiRangesExact[ri++] = (ImWchar)kNotoSansSCRanges[i*2];
-        uiRangesExact[ri++] = (ImWchar)kNotoSansSCRanges[i*2+1];
+    const char* sysFontPath = findSystemUIFont();
+    if (sysFontPath) {
+        uiFont = io.Fonts->AddFontFromFileTTF(sysFontPath, 26.0f, nullptr, uiRanges);
+        if (uiFont) {
+            io.FontDefault = uiFont;
+            mainFont = uiFont;
+        } else {
+            fprintf(stderr, "WARN: system font load failed: %s\n", sysFontPath);
+        }
+    } else {
+        fprintf(stderr, "WARN: no system UI font found, using default\n");
     }
-    uiRangesExact[ri] = 0;
-    ImFontConfig uiCfg; uiCfg.MergeMode = false; uiCfg.FontDataOwnedByAtlas = false;
-    uiFont = io.Fonts->AddFontFromMemoryTTF(
-        (void*)kNotoSansSC, kNotoSansSC_len, 26.0f, &uiCfg, uiRangesExact);
-    if (uiFont) io.FontDefault = uiFont;
-    else fprintf(stderr, "WARN: NotoSansSC font failed to load\n");
-    mainFont = uiFont ? uiFont : mainFont;
-    // 加载 Latin Modern Math (数学符号)，覆盖所有数学 Unicode 块
-    static const ImWchar mathRanges[] = {
-        0x0020, 0x00FF, // Basic Latin + Latin-1 (数字、运算符)
-        0x0100, 0x017F, // Latin Extended-A
-        0x0370, 0x03FF, // Greek
+
+    // 2. 加载 KaTeX Main (数学符号 + 数字 + 运算符)
+    static const ImWchar katexMainRanges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin-1 (数字, +,-,*,/ 等)
+        0x0370, 0x03FF, // Greek (π, θ 等)
         0x2070, 0x209F, // superscripts/subscripts
-        0x2200, 0x22FF, // math operators
+        0x2200, 0x22FF, // math operators (√≡≤≥∈⊆∩∪∧∨¬−×÷)
         0x27C0, 0x27EF, // misc math
         0x2A00, 0x2AFF, // supp math operators
-        0x3000, 0x303F, // CJK punct
-        0x4E00, 0x5000, // CJK 常用
-        0xFF00, 0xFFEF, // fullwidth
         0,
     };
-    ImFontConfig mathCfg; mathCfg.FontDataOwnedByAtlas = false;
-    mathFont = io.Fonts->AddFontFromMemoryTTF(
-        (void*)kLatinModernMath, kLatinModernMath_len, 24.0f, &mathCfg, mathRanges);
-    if (!mathFont) mathFont = mainFont;
+    ImFontConfig katexCfg; katexCfg.FontDataOwnedByAtlas = false;
+    ImFont* katexMain = io.Fonts->AddFontFromMemoryTTF(
+        (void*)kKaTeXMain, kKaTeXMain_len, 24.0f, &katexCfg, katexMainRanges);
+    // KaTeX AMS (额外 AMS 符号如 ⊊)
+    ImFont* katexAMS = io.Fonts->AddFontFromMemoryTTF(
+        (void*)kKaTeXAMS, kKaTeXAMS_len, 24.0f, &katexCfg, katexMainRanges);
+    // KaTeX Size1 (大尺寸 ∑∏∫√)
+    static const ImWchar katexSizeRanges[] = {
+        0x0020, 0x00FF,
+        0x2200, 0x22FF, // math operators
+        0,
+    };
+    ImFont* katexSize1 = io.Fonts->AddFontFromMemoryTTF(
+        (void*)kKaTeXSize1, kKaTeXSize1_len, 28.0f, &katexCfg, katexSizeRanges);
+
+    // 数学渲染用 KaTeX Main 为主, Size1 为大符号
+    mathFont = katexMain ? katexMain : mainFont;
+    ImFont* bigOpFont = katexSize1 ? katexSize1 : mathFont;
     ImFont* smallFont = mathFont;
 
     ImGui::StyleColorsDark();
@@ -163,7 +200,8 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
 
     BoxRenderer renderer;
     renderer.setFonts(mainFont, mathFont, smallFont);
-    renderer.setScale(24.0f);
+    renderer.setBigOpFont(bigOpFont);
+    renderer.setScale(30.0f);
 
     // UI state
     char inputBuf[1024] = "";

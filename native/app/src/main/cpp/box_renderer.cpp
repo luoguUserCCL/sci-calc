@@ -165,8 +165,8 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
         }
         case Box::BigOp: {
             // 求和/连乘: 符号居中, 上限在正上方, 下限在正下方, body 在右侧
-            // 符号大小适中 (1.3x), 不要太巨型
-            ImFont* f = fallback(math_, ImGui::GetFont());
+            // 用 KaTeX Size1 字体渲染大运算符 (符号更美观)
+            ImFont* f = fallback(bigOpFont_ ? bigOpFont_ : math_, ImGui::GetFont());
             float symSize = fontSize_ * 1.3f;
             float symW = textWidth(b.opSymbol, f) * 1.1f + 4;
             float symH = symSize * 0.9f;
