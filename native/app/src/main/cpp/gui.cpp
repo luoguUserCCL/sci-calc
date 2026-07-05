@@ -223,6 +223,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     const char* fmtNames[5] = {"自动 / Auto", "科学计数 / Scientific", "定小数位 / Fixed point", "定有效位 / Fixed sig.", "浮点 / Float"};
     const char* baseNames[4] = {"2(二进制)", "8(八进制)", "10(十进制)", "16(十六进制)"};
     bool chinese = true;  // 默认中文
+    bool showSettings = false;  // 设置弹窗
 
     // For screenshot mode, pre-evaluate the expression before the loop.
     if (screenshot) {
@@ -246,7 +247,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
         ImGui::Begin("sci-calc", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
-        // --- 设置栏 (双语) ---
+        // --- 设置栏 (双语, 简洁) ---
         ImGui::PushFont(uiFont);
         if (ImGui::Combo(chinese?"模式":"Mode", &modeIdx, modeNames, 2)) {
             engine.config().outputMode = (modeIdx == 0) ? OutputMode::Math : OutputMode::Decimal;
@@ -255,25 +256,45 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
         ImGui::SameLine();
         if (ImGui::Combo(chinese?"进制":"Base", &baseIdx, baseNames, 4)) engine.config().numberBase = bases[baseIdx];
         ImGui::SameLine();
-        if (ImGui::Combo(chinese?"格式":"Format", &fmtIdx, fmtNames, 5)) {
-            engine.config().numFormat = (EngineConfig::NumFormat)fmtIdx;
-        }
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(100);
-        if (ImGui::InputInt(chinese?"精度":"Prec", &precision)) {
-            if (precision < 1) precision = 1;
-            engine.config().precision = (unsigned)precision;
-            BigFloat::defaultPrecision() = (unsigned)precision;
-        }
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(100);
-        if (ImGui::InputInt(chinese?"小数位":"Fixed", &fixedDigits)) {
-            if (fixedDigits < 0) fixedDigits = 0;
-            engine.config().fixedDigits = fixedDigits;
-        }
+        if (ImGui::Button(chinese?"设置...":"Settings...")) showSettings = true;
         ImGui::SameLine();
         if (ImGui::Button(chinese?"中/英":"CN/EN")) chinese = !chinese;
         ImGui::Separator();
+
+        // --- 设置弹窗 ---
+        if (showSettings) {
+            ImGui::OpenPopup(chinese?"设置":"Settings");
+            showSettings = false;
+        }
+        if (ImGui::BeginPopupModal(chinese?"设置":"Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text(chinese?"小数模式格式:":"Decimal format:");
+            ImGui::Combo("##fmt", &fmtIdx, fmtNames, 5);
+            engine.config().numFormat = (EngineConfig::NumFormat)fmtIdx;
+            ImGui::Separator();
+            if (fmtIdx == 2) { // 定小数位
+                ImGui::SetNextItemWidth(200);
+                ImGui::InputInt(chinese?"小数位数":"Decimal places", &fixedDigits);
+                if (fixedDigits < 0) fixedDigits = 0;
+                engine.config().fixedDigits = fixedDigits;
+            } else if (fmtIdx == 1 || fmtIdx == 3) { // 科学计数/定有效位
+                ImGui::SetNextItemWidth(200);
+                ImGui::InputInt(chinese?"有效位数":"Significant digits", &precision);
+                if (precision < 1) precision = 1;
+                engine.config().precision = (unsigned)precision;
+                BigFloat::defaultPrecision() = (unsigned)precision;
+            } else { // 自动/浮点
+                ImGui::SetNextItemWidth(200);
+                ImGui::InputInt(chinese?"最大精度":"Max precision", &precision);
+                if (precision < 1) precision = 1;
+                engine.config().precision = (unsigned)precision;
+                BigFloat::defaultPrecision() = (unsigned)precision;
+            }
+            ImGui::Separator();
+            if (ImGui::Button(chinese?"关闭":"Close", ImVec2(120, 0))) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
 
         // --- 输入区 ---
         ImGui::Text(chinese?"数学输入:":"Math input:");

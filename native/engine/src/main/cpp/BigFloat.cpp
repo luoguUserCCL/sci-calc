@@ -291,7 +291,8 @@ BigFloat BigFloat::exp(const BigFloat& x) {
 
 BigFloat BigFloat::ln(const BigFloat& x) {
     if (x.isZero() || x.isNegative()) throw std::invalid_argument("ln of non-positive");
-    if (x == BigFloat(1)) return BigFloat();
+    // 精确检查 ln(1) = 0 (用有理数比较避免 BigFloat 精度差异)
+    if (x.toRational() == BigRational(1)) return BigFloat();
     unsigned prec = x.precision(); if (prec == 0) prec = defaultPrecision();
     unsigned guard = prec + 12;
 
@@ -378,7 +379,14 @@ BigFloat BigFloat::sin(const BigFloat& x) {
         if (ns.cmp(sum) == 0) break;
         sum = ns;
     }
-    return sum.roundTo(prec);
+    sum = sum.roundTo(prec);
+    // 零化: 若结果绝对值极小 (< 10^-(prec-1)), 视为 0 (避免 sin(pi) 等的浮点残差)
+    {
+        BigFloat absSum = sum.isNegative() ? -sum : sum;
+        BigFloat threshold = fromRational(BigRational(BigInt(1), BigInt::pow(BigInt(10), BigInt((long long)(prec > 1 ? prec - 1 : 1)))), guard);
+        if (absSum.cmp(threshold) < 0) return BigFloat();
+    }
+    return sum;
 }
 
 BigFloat BigFloat::cos(const BigFloat& x) {
@@ -403,7 +411,14 @@ BigFloat BigFloat::cos(const BigFloat& x) {
         if (ns.cmp(sum) == 0) break;
         sum = ns;
     }
-    return sum.roundTo(prec);
+    sum = sum.roundTo(prec);
+    // 零化
+    {
+        BigFloat absSum = sum.isNegative() ? -sum : sum;
+        BigFloat threshold = fromRational(BigRational(BigInt(1), BigInt::pow(BigInt(10), BigInt((long long)(prec > 1 ? prec - 1 : 1)))), guard);
+        if (absSum.cmp(threshold) < 0) return BigFloat();
+    }
+    return sum;
 }
 
 BigFloat BigFloat::tan(const BigFloat& x) {

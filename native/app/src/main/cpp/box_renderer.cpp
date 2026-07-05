@@ -14,8 +14,10 @@ void BoxRenderer::setFonts(ImFont* main, ImFont* math, ImFont* small) {
 static ImFont* fallback(ImFont* f, ImFont* def) { return f ? f : def; }
 
 ImFont* BoxRenderer::fontFor(const Box& b) {
-    if (b.style == Box::Symbol || b.style == Box::Operator) return fallback(math_, main_);
-    return fallback(main_, ImGui::GetFont());
+    // 公式渲染内部所有文本都用 KaTeX 字体 (math_)
+    // math_ = KaTeX_Main-Regular (数字/字母/运算符)
+    // bigOpFont_ = KaTeX_Size1 (大运算符)
+    return fallback(math_, ImGui::GetFont());
 }
 
 float BoxRenderer::textWidth(const std::string& s, ImFont* f) {
@@ -245,7 +247,7 @@ BoxMetrics BoxRenderer::layout(const Box& b, float x, float y, bool doDraw) {
             break;
         }
         case Box::Function: {
-            ImFont* f = fallback(main_, ImGui::GetFont());
+            ImFont* f = fallback(math_, ImGui::GetFont());
             float nameW = textWidth(b.funcName, f);
             float subW = b.funcSub ? layout(*b.funcSub, x, y, false).width : 0;
             float argW = b.funcArg ? layout(*b.funcArg, x, y, false).width : 0;

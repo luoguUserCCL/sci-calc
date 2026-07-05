@@ -880,12 +880,16 @@ Value Evaluator::builtin(const std::string& name, const std::vector<Value>& args
     }
     if (name == "log") {
         if (args.size() == 1) {
+            // log(1) = 0
+            if (args[0].isRational() && args[0].rat == BigRational(1)) return Value::ofRat(BigRational(0));
             // ln
             if (config.outputMode == OutputMode::Math)
                 return Value::ofSym(Expr::makeCall("log",  node.args[0]->clone() ));
             return Value::ofDec(BigFloat::ln(args[0].toBigFloat(config.precision)));
         }
         if (args.size() == 2) {
+            // log_b(1) = 0, log_b(b) = 1 (暂只识别 1)
+            if (args[1].isRational() && args[1].rat == BigRational(1)) return Value::ofRat(BigRational(0));
             if (config.outputMode == OutputMode::Math)
                 return Value::ofSym(Expr::makeCall("log",  node.args[0]->clone(), node.args[1]->clone() ));
             return Value::ofDec(BigFloat::log(args[1].toBigFloat(config.precision),
@@ -894,11 +898,17 @@ Value Evaluator::builtin(const std::string& name, const std::vector<Value>& args
         throw std::runtime_error("log: 1 or 2 args");
     }
     if (name == "ln") { need(1);
+        // ln(1) = 0, ln(e) = 1 (精确识别)
+        if (args[0].isRational() && args[0].rat == BigRational(1)) return Value::ofRat(BigRational(0));
+        if (args[0].isSymbolic() && args[0].sym && args[0].sym->kind == Expr::Var &&
+            (args[0].sym->name == "e" || args[0].sym->name == "E")) return Value::ofRat(BigRational(1));
         if (config.outputMode == OutputMode::Math)
             return Value::ofSym(Expr::makeCall("ln",  node.args[0]->clone() ));
         return Value::ofDec(BigFloat::ln(args[0].toBigFloat(config.precision)));
     }
     if (name == "exp") { need(1);
+        // exp(0) = 1
+        if (args[0].isRational() && args[0].rat.isZero()) return Value::ofRat(BigRational(1));
         if (config.outputMode == OutputMode::Math)
             return Value::ofSym(Expr::makeCall("exp",  node.args[0]->clone() ));
         return Value::ofDec(BigFloat::exp(args[0].toBigFloat(config.precision)));
