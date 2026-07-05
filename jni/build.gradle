@@ -68,9 +68,12 @@ buildNativeLib('Macos', 'macos-x86_64', 'libscicalc',
      '-I', engineHdr, '-I', jniHdr, '-I', jniMdMac,
      *nativeSources.collect { it.absolutePath },
      '-o', new File(distDir, 'native/macos-x86_64/libscicalc.dylib').absolutePath])
+// Compute Zig availability at the project level (file() resolves to Project here,
+// not the task delegate) so the task is reliably disabled when Zig is absent.
+def zigBin = file("${rootProject.ext.sciCalcTools.macosZig.path}/zig")
+def zigPresent = zigBin.exists() && zigBin.canExecute()
 tasks.named('jniMacos').configure {
-    def zig = file("${rootProject.ext.sciCalcTools.macosZig.path}/zig")
-    enabled = zig.exists()   // skip entirely when Zig is absent
+    enabled = zigPresent
 }
 
 // --- Package the cross-platform Jar with embedded native libs ---

@@ -68,8 +68,11 @@ tasks.register('showToolchains') {
 
 // Collect every engine .cpp source (sorted for deterministic build).
 ext.engineSources = files(fileTree(dir: engineSrcDir, include: '*.cpp'))
+// CLI native sources: engine + app, EXCLUDING the GUI-only files
+// (gui.cpp, box_renderer.cpp) which need ImGui/GL headers.
 ext.allNativeSources = files(fileTree(dir: engineSrcDir, include: '*.cpp')) +
-                      files(fileTree(dir: appSrcDir, include: '*.cpp'))
+                      files(fileTree(dir: appSrcDir, include: '*.cpp',
+                                     exclude: ['gui.cpp', 'box_renderer.cpp']))
 
 def distDir = layout.buildDirectory.dir('distributions').get().asFile
 
@@ -112,11 +115,14 @@ tasks.register('buildWindowsExe', Exec) {
 }
 
 // --- macOS (Zig cc as cross C/C++ compiler) ---
+def zigBinPath = "${toolsDir}/zig-x86_64-linux-0.16.0/zig"
+def zigAvailable = file(zigBinPath).exists() && file(zigBinPath).canExecute()
 tasks.register('buildMacosExe', Exec) {
     group = 'sci-calc'
     description = 'Cross-compile the macOS native executable with Zig.'
+    enabled = zigAvailable
     def out = new File(distDir, 'sci-calc-macos')
-    def zig = "${toolsDir}/zig-x86_64-linux-0.16.0/zig"
+    def zig = zigBinPath
     def srcs = allNativeSources.collect { it.absolutePath }
     // `zig c++ -target x86_64-macos-gnu` cross-compiles to macOS.
     commandLine zig, 'c++', '-target', 'x86_64-macos-gnu',
