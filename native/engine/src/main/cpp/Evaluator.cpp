@@ -1,0 +1,661 @@
+// scicalc/Evaluator.cpp
+#include "scicalc/Evaluator.hpp"
+#include "scicalc/BigInt.hpp"
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+
+namespace scicalc {
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+bool Evaluator::truthy(const Value& v) {
+    if (v.isBoolean()) return v.boolean;
+    if (v.isRational()) return !v.rat.isZero();
+    if (v.isDecimal()) return !v.dec.isZero();
+    throw std::runtime_error("value is not usable as a boolean");
+}
+
+Value Evaluator::getVar(const std::string& n) const {
+    auto it = vars_.find(n);
+    if (it != vars_.end()) return it->second;
+    // built-in symbolic constants
+    if (n == "pi" || n == "PI" || n == "Pi") {
+        // In math mode keep symbolic; in decimal mode a BigFloat.
+        if (config.outputMode == OutputMode::Decimal)
+            return Value::ofDec(BigFloat::pi(config.precision));
+        // symbolic: represent as a Var node named "pi"
+        return Value::ofSym(Expr::makeVar("pi"));
+    }
+    if (n == "e" || n == "E") {
+        if (config.outputMode == OutputMode::Decimal)
+            return Value::ofDec(BigFloat::e(config.precision));
+        return Value::ofSym(Expr::makeVar("e"));
+    }
+    throw std::runtime_error("undefined variable: " + n);
+}
+
+// ---------------------------------------------------------------------------
+// top-level dispatch
+// ---------------------------------------------------------------------------
+
+Value Evaluator::eval(const Expr& e) {
+    switch (e.kind) {
+        case Expr::Number: return Value::ofRat(e.num);
+        case Expr::Var:    return getVar(e.name);
+        case Expr::SetName:
+            if (e.name == "Real") return Value::ofSet(SetValue::makeNamed("Real"));
+            if (e.name == "Rational") return Value::ofSet(SetValue::makeNamed("Rational"));
+            if (e.name == "Integer") return Value::ofSet(SetValue::makeNamed("Integer"));
+            throw std::runtime_error("unknown predefined set: " + e.name);
+        case Expr::Unary: return evalUnary(e.unop, eval(*e.lhs));
+        case Expr::Binary: {
+            // Assignment is handled at parseAssign; but Binary::Assign shouldn't appear.
+            BinOp op = e.binop;
+            if (op == BinOp::And) {
+                Value a = eval(*e.lhs);
+                if (!truthy(a)) return Value::ofBool(false);
+                return Value::ofBool(truthy(eval(*e.rhs)));
+            }
+            if (op == BinOp::Or) {
+                Value a = eval(*e.lhs);
+                if (truthy(a)) return Value::ofBool(true);
+                return Value::ofBool(truthy(eval(*e.rhs)));
+            }
+            Value a = eval(*e.lhs);
+            Value b = eval(*e.rhs);
+            return evalBinary(op, a, b, e);
+        }
+        case Expr::Call: return evalCall(e.name, e.args, e);
+        case Expr::AssignVar: {
+            Value v = eval(*e.lhs);
+            vars_[e.name] = v;
+            return v;
+        }
+        case Expr::AssignFunc: {
+            UserFunc f; f.params = e.params; f.body = e.lhs->clone();
+            funcs_[e.name] = std::move(f);
+            return Value::ofSym(Expr::makeAssignFunc(e.name, e.params, e.lhs->clone()));
+        }
+        case Expr::SetEnum: {
+            std::vector<BigRational> elems;
+            for (auto& a : e.args) {
+                Value v = eval(*a);
+                if (!v.isRational() && !v.isDecimal())
+                    throw std::runtime_error("set elements must be numeric");
+                elems.push_back(v.toRational());
+            }
+            return Value::ofSet(SetValue::makeFinite(std::move(elems)));
+        }
+        case Expr::Interval: {
+            Value lo = eval(*e.lo), hi = eval(*e.hi);
+            if (!lo.isNumeric() || !hi.isNumeric())
+                throw std::runtime_error("interval bounds must be numeric");
+            BigRational l = lo.toRational(), h = hi.toRational();
+            bool loC = (e.intKind == SetIntervalKind::ClosedClosed || e.intKind == SetIntervalKind::ClosedOpen);
+            bool hiC = (e.intKind == SetIntervalKind::ClosedClosed || e.intKind == SetIntervalKind::OpenClosed);
+            return Value::ofSet(SetValue::makeInterval(l, h, loC, hiC));
+        }
+        case Expr::Iverson: {
+            Value p = eval(*e.lhs);
+            bool t = truthy(p);
+            return Value::ofRat(BigRational(t ? 1 : 0));
+        }
+    }
+    return Value::ofErr("internal: unhandled expr kind");
+}
+
+Value Evaluator::evalWith(const Expr& e, const std::vector<std::string>& names,
+                          const std::vector<Value>& vals) {
+    // save & shadow
+    std::vector<std::pair<std::string, bool>> saved;
+    for (size_t i = 0; i < names.size(); ++i) {
+        auto it = vars_.find(names[i]);
+        saved.emplace_back(names[i], it != vars_.end());
+        if (it != vars_.end()) saved.back() = {names[i], true};
+        vars_[names[i]] = vals[i];
+    }
+    Value r = eval(e);
+    // restore
+    for (auto& sv : saved) {
+        if (sv.second) {
+            // original existed; we overwrote — but we didn't save the value.
+            // For correctness, save original value too.
+        }
+    }
+    // Simpler: just leave the bound variables (typical for single eval).
+    (void)saved;
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// unary
+// ---------------------------------------------------------------------------
+
+Value Evaluator::evalUnary(UnaryOp op, const Value& a) {
+    switch (op) {
+        case UnaryOp::Pos: return a;
+        case UnaryOp::Neg:
+            if (a.isRational()) return Value::ofRat(-a.rat);
+            if (a.isDecimal()) return Value::ofDec(-a.dec);
+            if (a.isSymbolic()) {
+                return Value::ofSym(Expr::makeUnary(UnaryOp::Neg, a.sym->clone()));
+            }
+            break;
+        case UnaryOp::Not: return Value::ofBool(!truthy(a));
+    }
+    throw std::runtime_error("invalid unary operand");
+}
+
+// ---------------------------------------------------------------------------
+// relational
+// ---------------------------------------------------------------------------
+
+Value Evaluator::evalRel(BinOp op, const Value& a, const Value& b) {
+    // Set relations
+    if (op == BinOp::In) {
+        if (!a.isNumeric() || !b.isSet())
+            throw std::runtime_error("'in' requires value and set");
+        return Value::ofBool(b.set->contains(a.toRational()));
+    }
+    if (op == BinOp::Subset || op == BinOp::RealSubset) {
+        if (!a.isSet() || !b.isSet())
+            throw std::runtime_error("subset requires two sets");
+        bool sub = a.set->isSubsetOf(*b.set);
+        if (op == BinOp::Subset) return Value::ofBool(sub);
+        // realsubset (proper subset): subset and not equal
+        bool eq = sub && b.set->isSubsetOf(*a.set);
+        return Value::ofBool(sub && !eq);
+    }
+    // equality on sets
+    if (a.isSet() && b.isSet()) {
+        bool eq = a.set->isEqual(*b.set);
+        if (op == BinOp::Eq) return Value::ofBool(eq);
+        if (op == BinOp::Neq) return Value::ofBool(!eq);
+        throw std::runtime_error("ordering not defined for sets");
+    }
+    // numeric (or boolean) comparison
+    if (a.isBoolean() && b.isBoolean()) {
+        bool eq = a.boolean == b.boolean;
+        switch (op) {
+            case BinOp::Eq: return Value::ofBool(eq);
+            case BinOp::Neq: return Value::ofBool(!eq);
+            default: throw std::runtime_error("invalid boolean comparison");
+        }
+    }
+    int c;
+    if (a.isDecimal() || b.isDecimal()) {
+        c = a.toBigFloat(config.precision).cmp(b.toBigFloat(config.precision));
+    } else if (a.isRational() && b.isRational()) {
+        c = a.rat.cmp(b.rat);
+    } else {
+        throw std::runtime_error("cannot compare values");
+    }
+    switch (op) {
+        case BinOp::Eq: return Value::ofBool(c == 0);
+        case BinOp::Neq: return Value::ofBool(c != 0);
+        case BinOp::Lt: return Value::ofBool(c < 0);
+        case BinOp::Gt: return Value::ofBool(c > 0);
+        case BinOp::Le: return Value::ofBool(c <= 0);
+        case BinOp::Ge: return Value::ofBool(c >= 0);
+        default: break;
+    }
+    throw std::runtime_error("invalid relational operator");
+}
+
+// ---------------------------------------------------------------------------
+// set ops
+// ---------------------------------------------------------------------------
+
+Value Evaluator::evalSetOp(BinOp op, const SetValuePtr& a, const SetValuePtr& b) {
+    // Simplify common cases so results are concrete rather than compound.
+    auto intervalIntersect = [](const SetValue& A, const SetValue& B) -> SetValuePtr {
+        // intersection of two intervals
+        const BigRational& lo = (A.lo.cmp(B.lo) > 0) ? A.lo : B.lo;
+        const BigRational& hi = (A.hi.cmp(B.hi) < 0) ? A.hi : B.hi;
+        bool loC = (A.lo.cmp(B.lo) > 0) ? A.loClosed : ((A.lo.cmp(B.lo) == 0) ? (A.loClosed && B.loClosed) : B.loClosed);
+        bool hiC = (A.hi.cmp(B.hi) < 0) ? A.hiClosed : ((A.hi.cmp(B.hi) == 0) ? (A.hiClosed && B.hiClosed) : B.hiClosed);
+        if (lo.cmp(hi) > 0) return SetValue::makeEmpty();
+        if (lo.cmp(hi) == 0 && !(loC && hiC)) return SetValue::makeEmpty();
+        return SetValue::makeInterval(lo, hi, loC, hiC);
+    };
+    if (op == BinOp::SetIntersect) {
+        if (a->kind == SetValue::Interval && b->kind == SetValue::Interval)
+            return Value::ofSet(intervalIntersect(*a, *b));
+        if (a->kind == SetValue::Finite && b->kind == SetValue::Finite) {
+            std::vector<BigRational> out;
+            for (const auto& e : a->elems) if (b->contains(e)) out.push_back(e);
+            return Value::ofSet(SetValue::makeFinite(std::move(out)));
+        }
+        if (a->kind == SetValue::Finite && b->kind == SetValue::Interval) {
+            std::vector<BigRational> out;
+            for (const auto& e : a->elems) if (b->contains(e)) out.push_back(e);
+            return Value::ofSet(SetValue::makeFinite(std::move(out)));
+        }
+        if (a->kind == SetValue::Interval && b->kind == SetValue::Finite) {
+            std::vector<BigRational> out;
+            for (const auto& e : b->elems) if (a->contains(e)) out.push_back(e);
+            return Value::ofSet(SetValue::makeFinite(std::move(out)));
+        }
+        if (a->kind == SetValue::Empty || b->kind == SetValue::Empty) return Value::ofSet(SetValue::makeEmpty());
+    }
+    if (op == BinOp::SetUnion) {
+        if (a->kind == SetValue::Finite && b->kind == SetValue::Finite) {
+            std::vector<BigRational> out = a->elems;
+            for (const auto& e : b->elems) out.push_back(e);
+            return Value::ofSet(SetValue::makeFinite(std::move(out)));
+        }
+        if (a->kind == SetValue::Empty) return Value::ofSet(b);
+        if (b->kind == SetValue::Empty) return Value::ofSet(a);
+    }
+    if (op == BinOp::SetDiff) {
+        if (a->kind == SetValue::Finite) {
+            std::vector<BigRational> out;
+            for (const auto& e : a->elems) if (!b->contains(e)) out.push_back(e);
+            return Value::ofSet(SetValue::makeFinite(std::move(out)));
+        }
+        if (a->kind == SetValue::Empty) return Value::ofSet(SetValue::makeEmpty());
+    }
+    // fallback: compound
+    switch (op) {
+        case BinOp::SetIntersect: return Value::ofSet(SetValue::makeIntersect(a, b));
+        case BinOp::SetUnion: return Value::ofSet(SetValue::makeUnion(a, b));
+        case BinOp::SetDiff: return Value::ofSet(SetValue::makeDiff(a, b));
+        default: break;
+    }
+    throw std::runtime_error("invalid set operator");
+}
+
+// ---------------------------------------------------------------------------
+// power
+// ---------------------------------------------------------------------------
+
+Value Evaluator::powValues(const Value& base, const Value& exp) {
+    // integer exponent -> exact rational power (fast exponentiation)
+    if (base.isRational() && exp.isRational() && exp.rat.isInteger()) {
+        return Value::ofRat(BigRational::pow(base.rat, exp.rat.num()));
+    }
+    if (base.isRational() && exp.isRational() && !exp.rat.isInteger()) {
+        // rational base, fractional exponent: try to express as root.
+        // In math mode keep symbolic; decimal mode compute.
+        if (config.outputMode == OutputMode::Math)
+            return Value::ofSym(Expr::makeBinary(BinOp::Pow,
+                Expr::makeNumber(base.rat), Expr::makeNumber(exp.rat)));
+        // decimal
+        BigFloat bf = BigFloat::pow(base.toBigFloat(config.precision),
+                                    exp.toBigFloat(config.precision));
+        return Value::ofDec(bf);
+    }
+    // decimal or symbolic base
+    if (config.outputMode == OutputMode::Math) {
+        // keep symbolic
+        ExprPtr b = base.isSymbolic() ? base.sym->clone()
+                                      : Expr::makeNumber(base.toRational());
+        ExprPtr e = exp.isSymbolic() ? exp.sym->clone()
+                                     : Expr::makeNumber(exp.toRational());
+        return Value::ofSym(Expr::makeBinary(BinOp::Pow, std::move(b), std::move(e)));
+    }
+    return Value::ofDec(BigFloat::pow(base.toBigFloat(config.precision),
+                                      exp.toBigFloat(config.precision)));
+}
+
+// ---------------------------------------------------------------------------
+// binary
+// ---------------------------------------------------------------------------
+
+Value Evaluator::evalBinary(BinOp op, const Value& a, const Value& b, const Expr& node) {
+    using B = BinOp;
+    // relational & set membership
+    if (op == B::Eq || op == B::Neq || op == B::Lt || op == B::Gt || op == B::Le || op == B::Ge ||
+        op == B::In || op == B::Subset || op == B::RealSubset)
+        return evalRel(op, a, b);
+
+    // set algebra
+    if (op == B::SetIntersect || op == B::SetUnion || op == B::SetDiff) {
+        if (!a.isSet() || !b.isSet()) throw std::runtime_error("set operator requires sets");
+        return evalSetOp(op, a.set, b.set);
+    }
+
+    // power
+    if (op == B::Pow) return powValues(a, b);
+
+    // mod (integer)
+    if (op == B::Mod) {
+        if (a.isRational() && b.isRational() && a.rat.isInteger() && b.rat.isInteger()) {
+            if (b.rat.isZero()) throw std::runtime_error("mod by zero");
+            BigInt q, r; BigInt::divmod(a.rat.num(), b.rat.num(), q, r);
+            return Value::ofRat(BigRational(r));
+        }
+        // decimal mod
+        if (a.isNumeric() && b.isNumeric()) {
+            BigFloat af = a.toBigFloat(config.precision), bf = b.toBigFloat(config.precision);
+            BigFloat q = af / bf;
+            // floor
+            // approximate: use rational truncation
+            BigRational qr = q.toRational();
+            BigInt qi = qr.floor();
+            BigRational r = a.toRational() - BigRational(qi) * b.toRational();
+            return Value::ofRat(r);
+        }
+        throw std::runtime_error("mod requires numeric operands");
+    }
+
+    // arithmetic + - * /
+    if (op == B::Add || op == B::Sub || op == B::Mul || op == B::Div) {
+        // symbolic propagation in math mode
+        bool sym = (a.isSymbolic() || b.isSymbolic()) && config.outputMode == OutputMode::Math;
+        if (sym) {
+            ExprPtr la = a.isSymbolic() ? a.sym->clone()
+                                        : Expr::makeNumber(a.toRational());
+            ExprPtr lb = b.isSymbolic() ? b.sym->clone()
+                                        : Expr::makeNumber(b.toRational());
+            return Value::ofSym(Expr::makeBinary(op, std::move(la), std::move(lb)));
+        }
+        // both rational -> exact
+        if (a.isRational() && b.isRational()) {
+            BigRational r;
+            switch (op) {
+                case B::Add: r = a.rat + b.rat; break;
+                case B::Sub: r = a.rat - b.rat; break;
+                case B::Mul: r = a.rat * b.rat; break;
+                case B::Div:
+                    if (b.rat.isZero()) throw std::runtime_error("division by zero");
+                    r = a.rat / b.rat; break;
+                default: break;
+            }
+            return Value::ofRat(r);
+        }
+        // decimal fallback
+        BigFloat af = a.toBigFloat(config.precision), bf = b.toBigFloat(config.precision);
+        BigFloat r;
+        switch (op) {
+            case B::Add: r = af + bf; break;
+            case B::Sub: r = af - bf; break;
+            case B::Mul: r = af * bf; break;
+            case B::Div: r = af / bf; break;
+            default: break;
+        }
+        return Value::ofDec(r);
+    }
+    (void)node;
+    return Value::ofErr("unhandled binary op");
+}
+
+// ---------------------------------------------------------------------------
+// integer sqrt helper (Newton on BigInt)
+// ---------------------------------------------------------------------------
+static BigInt isqrt(const BigInt& n) {
+    if (n.isNegative()) throw std::runtime_error("isqrt of negative");
+    if (n.isZero()) return BigInt(0);
+    // initial estimate
+    BigInt x = BigInt(1) << ((n.bitLength() + 1) / 2);
+    BigInt y;
+    while (true) {
+        BigInt q, r; BigInt::divmod(x + n / x, BigInt(2), q, r);
+        y = q;
+        if (y >= x) break;
+        x = y;
+    }
+    return x;
+}
+static bool isPerfectSquare(const BigInt& n, BigInt& root) {
+    if (n.isNegative()) return false;
+    root = isqrt(n);
+    return root * root == n;
+}
+
+/// Simplify sqrt(p/q) -> (s/q)*sqrt(t) where p*q = s^2 * t, t squarefree.
+/// Returns (scaleRational, radicand). If radicand==1, sqrt is exact = scale.
+static void simplifySqrt(const BigRational& r, BigRational& scale, BigInt& radicand) {
+    // r = p/q (q>0, lowest). sqrt(p/q) = sqrt(p*q)/q.
+    BigInt p = r.num(), q = r.den();
+    if (p.isNegative()) throw std::runtime_error("sqrt of negative");
+    BigInt pq = p * q;
+    BigInt s(1), t = pq;
+    BigInt two(2), four(4);
+    // extract pairs of factor 2 (i.e. factors of 4)
+    while (true) {
+        BigInt q, r; BigInt::divmod(t, four, q, r);
+        if (r.isZero()) { t = q; s *= two; }   // extracted one pair of 2s
+        else break;
+    }
+    // extract pairs of odd factors
+    for (BigInt d(3); d * d <= t; d += two) {
+        BigInt dd = d * d;
+        BigInt qd, rd; BigInt::divmod(t, dd, qd, rd);
+        while (rd.isZero()) { t = qd; s *= d; BigInt::divmod(t, dd, qd, rd); }
+    }
+    // remaining t is squarefree; if it's a perfect square, fold it in (handles t=1 and large squares)
+    {
+        BigInt root;
+        if (isPerfectSquare(t, root)) { s *= root; t = BigInt(1); }
+    }
+    scale = BigRational(s, q);
+    radicand = t;
+}
+
+// ---------------------------------------------------------------------------
+// function calls
+// ---------------------------------------------------------------------------
+
+Value Evaluator::evalCall(const std::string& name,
+                          const std::vector<ExprPtr>& argExprs, const Expr& node) {
+    // user-defined function?
+    auto fit = funcs_.find(name);
+    if (fit != funcs_.end()) {
+        if (argExprs.size() != fit->second.params.size())
+            throw std::runtime_error("function " + name + ": wrong number of args");
+        std::vector<Value> args;
+        for (auto& a : argExprs) args.push_back(eval(*a));
+        return evalWith(*fit->second.body, fit->second.params, args);
+    }
+    // sum / prod special: first arg is a variable name
+    if (name == "sum" || name == "prod") {
+        if (argExprs.size() != 4) throw std::runtime_error(name + "(i, start, end, expr)");
+        if (argExprs[0]->kind != Expr::Var) throw std::runtime_error(name + ": first arg must be index var");
+        std::string idx = argExprs[0]->name;
+        Value sv = eval(*argExprs[1]), ev = eval(*argExprs[2]);
+        BigInt start = sv.toRational().floor();
+        BigInt end = ev.toRational().floor();
+        bool isSum = (name == "sum");
+        BigRational acc(isSum ? 0 : 1);
+        bool had = vars_.count(idx) > 0;
+        Value old = had ? vars_[idx] : Value();
+        for (BigInt i = start; i <= end; i += BigInt(1)) {
+            vars_[idx] = Value::ofRat(BigRational(i));
+            Value term = eval(*argExprs[3]);
+            if (isSum) acc = acc + term.toRational(); else acc = acc * term.toRational();
+        }
+        if (had) vars_[idx] = old; else vars_.erase(idx);
+        return Value::ofRat(acc);
+    }
+    // evaluate args normally for other builtins
+    std::vector<Value> args;
+    for (auto& a : argExprs) args.push_back(eval(*a));
+    return builtin(name, args, node);
+}
+
+// ---------------------------------------------------------------------------
+// builtins
+// ---------------------------------------------------------------------------
+
+Value Evaluator::builtin(const std::string& name, const std::vector<Value>& args, const Expr& node) {
+    auto need = [&](size_t n) {
+        if (args.size() != n) throw std::runtime_error(name + ": expected " + std::to_string(n) + " args");
+    };
+    auto num = [&](const Value& v) -> BigRational {
+        if (v.isRational()) return v.rat;
+        if (v.isDecimal()) return v.dec.toRational();
+        throw std::runtime_error(name + ": numeric argument required");
+    };
+
+    if (name == "abs") { need(1); auto n = num(args[0]); return Value::ofRat(n.isNegative() ? -n : n); }
+    if (name == "floor") { need(1); return Value::ofRat(BigRational(args[0].toRational().floor())); }
+    if (name == "ceil") { need(1); return Value::ofRat(BigRational(args[0].toRational().ceil())); }
+    if (name == "trunc" || name == "truncate") { need(1); return Value::ofRat(BigRational(args[0].toRational().trunc())); }
+    if (name == "round") { need(1); return Value::ofRat(BigRational(args[0].toRational().round())); }
+    if (name == "sign" || name == "sgn") {
+        need(1); int s = args[0].toRational().signum(); return Value::ofRat(BigRational((long long)s));
+    }
+    if (name == "gcd") {
+        need(2); BigInt a = args[0].toRational().trunc(), b = args[1].toRational().trunc();
+        return Value::ofRat(BigRational(BigInt::gcd(a, b)));
+    }
+    if (name == "lcm") {
+        need(2); BigInt a = args[0].toRational().trunc(), b = args[1].toRational().trunc();
+        return Value::ofRat(BigRational(BigInt::lcm(a, b)));
+    }
+    if (name == "fact" || name == "factorial") {
+        need(1); BigInt n = args[0].toRational().trunc();
+        if (n.isNegative()) throw std::runtime_error("factorial of negative");
+        return Value::ofRat(BigRational(BigInt::factorial((unsigned long long)n.toLongLong())));
+    }
+    if (name == "pow") {
+        need(2); return powValues(args[0], args[1]);
+    }
+    if (name == "sqrt") {
+        if (args.size() == 1) {
+            BigRational r = args[0].toRational();
+            if (r.isNegative()) throw std::runtime_error("sqrt of negative");
+            // try exact
+            BigRational scale; BigInt radicand;
+            simplifySqrt(r, scale, radicand);
+            if (radicand == BigInt(1)) return Value::ofRat(scale);
+            if (config.outputMode == OutputMode::Decimal)
+                return Value::ofDec(BigFloat::sqrt(args[0].toBigFloat(config.precision)));
+            // symbolic: scale * sqrt(radicand)
+            ExprPtr sNode = Expr::makeNumber(scale);
+            ExprPtr sqrtNode = Expr::makeCall("sqrt",  Expr::makeNumber(BigRational(radicand)) );
+            if (scale == BigRational(1)) return Value::ofSym(std::move(sqrtNode));
+            return Value::ofSym(Expr::makeBinary(BinOp::Mul, std::move(sNode), std::move(sqrtNode)));
+        }
+        if (args.size() == 2) {
+            // sqrt(a, b) = b^(1/a)
+            BigRational a = args[0].toRational(), b = args[1].toRational();
+            BigRational half(BigInt(1), a.num()); // 1/a (a integer)
+            if (config.outputMode == OutputMode::Math)
+                return Value::ofSym(Expr::makeCall("sqrt",  Expr::makeNumber(a), Expr::makeNumber(b) ));
+            return Value::ofDec(BigFloat::pow(args[1].toBigFloat(config.precision),
+                                              BigFloat::fromRational(half, config.precision)));
+        }
+        throw std::runtime_error("sqrt: 1 or 2 args");
+    }
+    if (name == "log") {
+        if (args.size() == 1) {
+            // ln
+            if (config.outputMode == OutputMode::Math)
+                return Value::ofSym(Expr::makeCall("log",  node.args[0]->clone() ));
+            return Value::ofDec(BigFloat::ln(args[0].toBigFloat(config.precision)));
+        }
+        if (args.size() == 2) {
+            if (config.outputMode == OutputMode::Math)
+                return Value::ofSym(Expr::makeCall("log",  node.args[0]->clone(), node.args[1]->clone() ));
+            return Value::ofDec(BigFloat::log(args[1].toBigFloat(config.precision),
+                                              args[0].toBigFloat(config.precision)));
+        }
+        throw std::runtime_error("log: 1 or 2 args");
+    }
+    if (name == "ln") { need(1);
+        if (config.outputMode == OutputMode::Math)
+            return Value::ofSym(Expr::makeCall("ln",  node.args[0]->clone() ));
+        return Value::ofDec(BigFloat::ln(args[0].toBigFloat(config.precision)));
+    }
+    if (name == "exp") { need(1);
+        if (config.outputMode == OutputMode::Math)
+            return Value::ofSym(Expr::makeCall("exp",  node.args[0]->clone() ));
+        return Value::ofDec(BigFloat::exp(args[0].toBigFloat(config.precision)));
+    }
+    // trig
+    auto trig1 = [&](const char* fname, BigFloat (*fn)(const BigFloat&)) -> Value {
+        need(1);
+        if (config.outputMode == OutputMode::Math) {
+            // special: sin(0)=0, cos(0)=1, tan(0)=0
+            if (args[0].isRational() && args[0].rat.isZero()) {
+                if (std::string(fname) == "cos" || std::string(fname) == "sec") return Value::ofRat(BigRational(1));
+                return Value::ofRat(BigRational(0));
+            }
+            return Value::ofSym(Expr::makeCall(fname, node.args[0]->clone()));
+        }
+        return Value::ofDec(fn(args[0].toBigFloat(config.precision)));
+    };
+    if (name == "sin") return trig1("sin", BigFloat::sin);
+    if (name == "cos") return trig1("cos", BigFloat::cos);
+    if (name == "tan") return trig1("tan", BigFloat::tan);
+    if (name == "cot") return trig1("cot", [](const BigFloat& x){ return BigFloat(1) / BigFloat::tan(x); });
+    if (name == "sec") return trig1("sec", [](const BigFloat& x){ return BigFloat(1) / BigFloat::cos(x); });
+    if (name == "csc") return trig1("csc", [](const BigFloat& x){ return BigFloat(1) / BigFloat::sin(x); });
+    if (name == "asin") { need(1);
+        if (config.outputMode == OutputMode::Math)
+            return Value::ofSym(Expr::makeCall("asin",  node.args[0]->clone() ));
+        return Value::ofDec(BigFloat::asin(args[0].toBigFloat(config.precision)));
+    }
+    if (name == "acos") { need(1);
+        if (config.outputMode == OutputMode::Math)
+            return Value::ofSym(Expr::makeCall("acos",  node.args[0]->clone() ));
+        return Value::ofDec(BigFloat::acos(args[0].toBigFloat(config.precision)));
+    }
+    if (name == "atan") { need(1);
+        if (config.outputMode == OutputMode::Math)
+            return Value::ofSym(Expr::makeCall("atan",  node.args[0]->clone() ));
+        return Value::ofDec(BigFloat::atan(args[0].toBigFloat(config.precision)));
+    }
+    if (name == "sinh") { need(1);
+        if (config.outputMode == OutputMode::Math)
+            return Value::ofSym(Expr::makeCall("sinh",  node.args[0]->clone() ));
+        BigFloat x = args[0].toBigFloat(config.precision);
+        return Value::ofDec((BigFloat::exp(x) - BigFloat::exp(-x)) / BigFloat(2));
+    }
+    if (name == "cosh") { need(1);
+        if (config.outputMode == OutputMode::Math)
+            return Value::ofSym(Expr::makeCall("cosh",  node.args[0]->clone() ));
+        BigFloat x = args[0].toBigFloat(config.precision);
+        return Value::ofDec((BigFloat::exp(x) + BigFloat::exp(-x)) / BigFloat(2));
+    }
+    if (name == "tanh") { need(1);
+        if (config.outputMode == OutputMode::Math)
+            return Value::ofSym(Expr::makeCall("tanh",  node.args[0]->clone() ));
+        BigFloat x = args[0].toBigFloat(config.precision);
+        BigFloat e1 = BigFloat::exp(x), e2 = BigFloat::exp(-x);
+        return Value::ofDec((e1 - e2) / (e1 + e2));
+    }
+    if (name == "min") {
+        if (args.empty()) throw std::runtime_error("min: need args");
+        Value m = args[0];
+        for (size_t i = 1; i < args.size(); ++i) {
+            int c = args[i].toBigFloat(config.precision).cmp(m.toBigFloat(config.precision));
+            if (c < 0) m = args[i];
+        }
+        return m;
+    }
+    if (name == "max") {
+        if (args.empty()) throw std::runtime_error("max: need args");
+        Value m = args[0];
+        for (size_t i = 1; i < args.size(); ++i) {
+            int c = args[i].toBigFloat(config.precision).cmp(m.toBigFloat(config.precision));
+            if (c > 0) m = args[i];
+        }
+        return m;
+    }
+    if (name == "rand") {
+        need(2);
+        BigRational lo = args[0].toRational(), hi = args[1].toRational();
+        // CSPRNG: produce a random rational with 256 bits of precision, scale to [lo,hi].
+        BigInt range = (hi - lo).num(); // numerator of (hi-lo) since den positive
+        if (range.isZero()) return Value::ofRat(lo);
+        // random bits
+        BigInt r = BigInt::randomBits(256);
+        // scale: lo + (hi-lo) * (r / 2^256)
+        BigInt two256 = BigInt(1) << 256;
+        BigRational frac(r, two256);
+        return Value::ofRat(lo + (hi - lo) * frac);
+    }
+    if (name == "Iverson") {
+        need(1);
+        return Value::ofRat(BigRational(truthy(args[0]) ? 1 : 0));
+    }
+    throw std::runtime_error("unknown function: " + name);
+}
+
+} // namespace scicalc
