@@ -48,7 +48,16 @@ static const char* findUnicodeFont() {
 }
 
 int runGui(int argc, char** argv, Engine& engine) {
-    (void)argc; (void)argv;
+    // Optional: --screenshot "EXPR" OUT.ppm  -> render one frame and save a PPM.
+    bool screenshot = false;
+    std::string shotExpr, shotPath;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--screenshot" && i + 2 < argc) {
+            screenshot = true; shotExpr = argv[i+1]; shotPath = argv[i+2]; break;
+        }
+    }
+
     glfwSetErrorCallback(glfwError);
     if (!glfwInit()) return 1;
 
@@ -123,6 +132,16 @@ int runGui(int argc, char** argv, Engine& engine) {
     const char* modeNames[2] = {"Math (symbolic)", "Decimal (high-precision)"};
     const char* fmtNames[5] = {"General", "Scientific", "Fixed point", "Fixed significant", "Float"};
     const char* baseNames[4] = {"2 (bin)", "8 (oct)", "10 (dec)", "16 (hex)"};
+
+    // For screenshot mode, pre-evaluate the expression before the loop.
+    if (screenshot) {
+        std::strncpy(inputBuf, shotExpr.c_str(), sizeof(inputBuf) - 1);
+        EngineResult r = engine.evaluate(shotExpr);
+        lastOutput = r.ok ? r.output : "";
+        lastError = r.ok ? "" : r.error;
+        lastTree = std::move(r.renderTree);
+        try { Lexer lex(shotExpr); Parser p(lex.tokenize()); ExprPtr ast = p.parse(); inputTree = buildInputBox(*ast); } catch(...) {}
+    }
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -284,6 +303,21 @@ int runGui(int argc, char** argv, Engine& engine) {
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
+
+        // Screenshot: capture the framebuffer to a PPM after the first rendered frame.
+        if (screenshot) {
+            std::vector<unsigned char> px((size_t)dw * dh * 3);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(0, 0, dw, dh, GL_RGB, GL_UNSIGNED_BYTE, px.data());
+            std::ofstream f(shotPath, std::ios::binary);
+            f << "P6\n" << dw << " " << dh << "\n255\n";
+            // PPM is top-down; GL is bottom-up, so flip rows.
+            for (int y = dh - 1; y >= 0; --y)
+                f.write((const char*)&px[(size_t)y * dw * 3], (std::streamsize)dw * 3);
+            f.close();
+            fprintf(stderr, "screenshot saved -> %s (%dx%d)\n", shotPath.c_str(), dw, dh);
+            break;
+        }
     }
 
     ImGui_ImplOpenGL3_Shutdown();

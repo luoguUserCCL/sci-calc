@@ -135,6 +135,12 @@ int main(int argc, char** argv) {
             return 0;
         }
         else if (a == "--gui") wantGui = true;
+        else if (a == "--screenshot") {
+            // --screenshot EXPR OUT.ppm  -> launch GUI in screenshot mode
+            wantGui = true;
+            // consume the two following args so they aren't treated as positional
+            if (i + 2 < argc) i += 2;
+        }
         else if (a == "--version") { std::cout << "sci-calc 1.0.0\n"; return 0; }
         else if (a.substr(0,2) == "--") { std::cerr << "unknown option: " << a << "\n"; }
         else positional.push_back(a);
