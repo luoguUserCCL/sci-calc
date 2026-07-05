@@ -61,9 +61,9 @@ buildNativeLib('Windows', 'windows-x86_64', 'scicalc',
      '-static','-static-libgcc','-static-libstdc++','-lwinpthread'])
 tasks.named('jniWindows').configure { environment 'PATH', "${rootProject.ext.sciCalcTools.windowsMingw.path}:${System.env.PATH}" }
 
-// macOS x86_64 (.dylib) via Zig (skipped if Zig is not present yet)
+// macOS x86_64 (.dylib) via Zig (跳过当 Zig 不存在时)
 buildNativeLib('Macos', 'macos-x86_64', 'libscicalc',
-    [rootProject.ext.sciCalcTools.macosZig.path + '/zig','c++','-target','x86_64-macos-gnu',
+    [rootProject.ext.sciCalcTools.macosZig.path + '/zig','c++','-target','x86_64-macos',
      '-std=c++20','-O2','-shared','-fPIC',
      '-I', engineHdr, '-I', jniHdr, '-I', jniMdMac,
      *nativeSources.collect { it.absolutePath },
