@@ -1,0 +1,16 @@
+// settings.gradle — sci-calc build.
+pluginManagement {
+    repositories { gradlePluginPortal(); mavenCentral() }
+}
+
+// Modern Toolchain API note: the deprecated `model { toolChains {} }` software-model
+// block is NOT used. Native toolchains (host GCC + portable MinGW/Zig) are registered
+// via the modern `toolChains {}` extension in each cpp subproject's build.gradle,
+// and cross-compilation is driven by Exec tasks reading the `sciCalcTools` registry
+// declared in the root build.gradle. JDK provisioning uses Gradle's built-in
+// auto-detection (no foojay resolver needed since we ship a local JDK).
+
+rootProject.name = 'sci-calc'
+include ':native:engine'
+include ':native:app'
+include ':jni'

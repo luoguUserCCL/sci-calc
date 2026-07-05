@@ -1,0 +1,131 @@
+// build.gradle — root configuration for sci-calc.
+// The cpp-application / cpp-library plugins are applied in the native
+// subprojects (they are core Gradle plugins). This root script declares the
+// shared toolchain registry and the cross-compilation + Jar tasks.
+//
+// Cross-compilation (Windows/MinGW, macOS/Zig) is performed by custom Exec
+// tasks that honor the toolchain registry declared in `sciCalcTools`.
+
+// -----------------------------------------------------------------------------
+// Toolchain registry (modern API, replaces `model { toolChains {} }`).
+// Each entry records the prefix + path of a cross toolchain. Custom build tasks
+// read these to invoke the correct compiler per target. env.sh re-derives paths
+// at task-execution time, so a mid-session toolchain reset is survived.
+// -----------------------------------------------------------------------------
+ext {
+    toolsDir = file("${rootDir}/../tools")   // shared portable toolchains
+    sciCalcTools = [
+        linuxGcc : [ cc: '/usr/bin/gcc',  cxx: '/usr/bin/g++',  prefix: '',          path: '/usr/bin' ],
+        windowsMingw : [ cc: "${toolsDir}/mingw-root/usr/bin/x86_64-w64-mingw32ucrt-gcc",
+                          cxx: "${toolsDir}/mingw-root/usr/bin/x86_64-w64-mingw32ucrt-g++",
+                          prefix: 'x86_64-w64-mingw32ucrt-',
+                          path: "${toolsDir}/mingw-root/usr/bin" ],
+        macosZig : [ cc: "${toolsDir}/zig-x86_64-linux-0.16.0/zig",
+                     cxx: "${toolsDir}/zig-x86_64-linux-0.16.0/zig",
+                     prefix: '', path: "${toolsDir}/zig-x86_64-linux-0.16.0" ]
+    ]
+    engineSrcDir = file("${rootDir}/native/engine/src/main/cpp")
+    engineHdrDir = file("${rootDir}/native/engine/src/main/public")
+    appSrcDir    = file("${rootDir}/native/app/src/main/cpp")
+    jniSrcDir    = file("${rootDir}/jni/src/main/cpp")
+    javaSrcDir   = file("${rootDir}/jni/src/main/java")
+    thirdParty   = file("${rootDir}/third_party")
+}
+
+// Common C++ flags for all native builds.
+ext.commonCxxFlags = ['-std=c++20', '-O2', '-Wall', '-Wno-unused-parameter',
+                      '-I', engineHdrDir.absolutePath]
+
+allprojects {
+    repositories { mavenCentral() }
+}
+
+// -----------------------------------------------------------------------------
+// Aggregate tasks (run from root): produce all 4 release artifacts.
+// -----------------------------------------------------------------------------
+tasks.register('buildAll') {
+    group = 'sci-calc'
+    description = 'Build all four release artifacts (Linux/Windows/macOS/Jar).'
+    dependsOn 'buildLinuxExe', 'buildWindowsExe', 'buildMacosExe', 'buildJar'
+}
+
+// Convenience: list available toolchains.
+tasks.register('showToolchains') {
+    doLast {
+        println "Registered toolchains (modern Toolchain API):"
+        sciCalcTools.each { name, t -> println "  ${name}: cc=${t.cc}" }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Cross-compilation tasks.
+//
+// Gradle's cpp-application plugin cross-compiles poorly to arbitrary toolchains,
+// so we drive MinGW (Windows) and Zig (macOS) directly via Exec tasks. Each
+// task honors the toolchain registry above (sciCalcTools), re-reading paths at
+// execution time so a toolchain directory reset is survived.
+// -----------------------------------------------------------------------------
+
+// Collect every engine .cpp source (sorted for deterministic build).
+ext.engineSources = files(fileTree(dir: engineSrcDir, include: '*.cpp'))
+ext.allNativeSources = files(fileTree(dir: engineSrcDir, include: '*.cpp')) +
+                      files(fileTree(dir: appSrcDir, include: '*.cpp'))
+
+def distDir = layout.buildDirectory.dir('distributions').get().asFile
+
+// --- Linux (native GCC) cross-compile-free build via Exec (guaranteed output) ---
+tasks.register('buildLinuxExe', Exec) {
+    group = 'sci-calc'
+    description = 'Build the Linux native executable (static, no JVM).'
+    def out = new File(distDir, 'sci-calc-linux')
+    def cc = sciCalcTools.linuxGcc.cxx
+    def srcs = allNativeSources.collect { it.absolutePath }
+    commandLine cc, '-std=c++20', '-O2', '-Wall', '-Wno-unused-parameter',
+            '-I', engineHdrDir.absolutePath,
+            '-static-libgcc', '-static-libstdc++',
+            *srcs,
+            '-o', out.absolutePath
+    inputs.files allNativeSources
+    outputs.file out
+    doFirst { distDir.mkdirs() }
+    doLast { println "Built Linux exe -> ${out}" }
+}
+
+// --- Windows (MinGW-w64 ucrt64 cross-compile) ---
+tasks.register('buildWindowsExe', Exec) {
+    group = 'sci-calc'
+    description = 'Cross-compile the Windows native executable with MinGW-w64.'
+    def out = new File(distDir, 'sci-calc-windows.exe')
+    def cc = sciCalcTools.windowsMingw.cxx
+    def srcs = allNativeSources.collect { it.absolutePath }
+    commandLine cc, '-std=c++20', '-O2', '-Wall', '-Wno-unused-parameter',
+            '-I', engineHdrDir.absolutePath,
+            '-static', '-static-libgcc', '-static-libstdc++',
+            *srcs,
+            '-o', out.absolutePath
+    // MinGW g++ spawns as/ld by name, so its bin dir must be on PATH.
+    environment 'PATH', "${sciCalcTools.windowsMingw.path}:${System.env.PATH}"
+    inputs.files allNativeSources
+    outputs.file out
+    doFirst { distDir.mkdirs() }
+    doLast { println "Built Windows exe -> ${out}" }
+}
+
+// --- macOS (Zig cc as cross C/C++ compiler) ---
+tasks.register('buildMacosExe', Exec) {
+    group = 'sci-calc'
+    description = 'Cross-compile the macOS native executable with Zig.'
+    def out = new File(distDir, 'sci-calc-macos')
+    def zig = "${toolsDir}/zig-x86_64-linux-0.16.0/zig"
+    def srcs = allNativeSources.collect { it.absolutePath }
+    // `zig c++ -target x86_64-macos-gnu` cross-compiles to macOS.
+    commandLine zig, 'c++', '-target', 'x86_64-macos-gnu',
+            '-std=c++20', '-O2', '-Wall', '-Wno-unused-parameter',
+            '-I', engineHdrDir.absolutePath,
+            *srcs,
+            '-o', out.absolutePath
+    inputs.files allNativeSources
+    outputs.file out
+    doFirst { distDir.mkdirs() }
+    doLast { println "Built macOS exe -> ${out}" }
+}

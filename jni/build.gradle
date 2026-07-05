@@ -1,0 +1,98 @@
+// jni/build.gradle — Java + JNI: compiles the Java wrapper, builds the native
+// library for every target platform, and packages a single cross-platform Jar
+// with all native libs embedded under /native/<os>-<arch>/.
+plugins { id 'java' }
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+sourceSets {
+    main { java.srcDirs = [ rootProject.ext.javaSrcDir ] }
+}
+
+// --- Compile Java classes ---
+tasks.named('compileJava') {
+    options.encoding = 'UTF-8'
+}
+
+// --- Build the JNI shared library for each target platform ---
+def engineHdr = rootProject.ext.engineHdrDir.absolutePath
+def engineSrc = rootProject.ext.engineSrcDir
+def jniSrc = rootProject.ext.jniSrcDir
+def javaHome = System.getenv('JAVA_HOME') ?: '/home/z/my-project/tools/jdk-21.0.11+10'
+def jniHdr = "${javaHome}/include"
+def jniMdWin = "${rootProject.ext.thirdParty}/jni-md/win32"
+def jniMdMac = "${rootProject.ext.thirdParty}/jni-md/darwin"
+def distDir = layout.buildDirectory.dir('distributions').get().asFile
+
+// Gather all sources: engine .cpp + jni_bridge.cpp
+def nativeSources = files(fileTree(dir: engineSrc, include: '*.cpp')) +
+                    files(fileTree(dir: jniSrc, include: '*.cpp'))
+
+// Produces build/distributions/native/<os>-<arch>/libscicalc.<ext>
+def buildNativeLib = { String name, String outDir, String libBase, List<String> cmdBase ->
+    tasks.register("jni${name}", Exec) {
+        def ext = name.endsWith('Windows') ? '.dll' : (name.endsWith('Macos') ? '.dylib' : '.so')
+        def out = new File(distDir, "native/${outDir}/${libBase}${ext}")
+        commandLine cmdBase
+        inputs.files nativeSources
+        outputs.file out
+        doFirst { out.parentFile.mkdirs() }
+        doLast { println "Built JNI lib ${name} -> ${out}" }
+    }
+}
+
+// Linux x86_64 (.so)
+buildNativeLib('Linux', 'linux-x86_64', 'libscicalc',
+    ['g++','-std=c++20','-O2','-fPIC','-shared',
+     '-I', engineHdr, '-I', jniHdr, '-I', "${jniHdr}/linux",
+     *nativeSources.collect { it.absolutePath },
+     '-o', new File(distDir, 'native/linux-x86_64/libscicalc.so').absolutePath,
+     '-static-libgcc','-static-libstdc++'])
+
+// Windows x86_64 (.dll) via MinGW
+buildNativeLib('Windows', 'windows-x86_64', 'scicalc',
+    [rootProject.ext.sciCalcTools.windowsMingw.cxx,'-std=c++20','-O2','-shared',
+     '-I', engineHdr, '-I', jniHdr, '-I', jniMdWin,
+     *nativeSources.collect { it.absolutePath },
+     '-o', new File(distDir, 'native/windows-x86_64/scicalc.dll').absolutePath,
+     '-static','-static-libgcc','-static-libstdc++','-lwinpthread'])
+tasks.named('jniWindows').configure { environment 'PATH', "${rootProject.ext.sciCalcTools.windowsMingw.path}:${System.env.PATH}" }
+
+// macOS x86_64 (.dylib) via Zig (skipped if Zig is not present yet)
+buildNativeLib('Macos', 'macos-x86_64', 'libscicalc',
+    [rootProject.ext.sciCalcTools.macosZig.path + '/zig','c++','-target','x86_64-macos-gnu',
+     '-std=c++20','-O2','-shared','-fPIC',
+     '-I', engineHdr, '-I', jniHdr, '-I', jniMdMac,
+     *nativeSources.collect { it.absolutePath },
+     '-o', new File(distDir, 'native/macos-x86_64/libscicalc.dylib').absolutePath])
+tasks.named('jniMacos').configure {
+    def zig = file("${rootProject.ext.sciCalcTools.macosZig.path}/zig")
+    onlyIf { zig.exists() }
+}
+
+// --- Package the cross-platform Jar with embedded native libs ---
+tasks.register('buildJar', Jar) {
+    group = 'sci-calc'
+    description = 'Package the cross-platform Jar with embedded JNI libs.'
+    dependsOn 'classes', 'jniLinux', 'jniWindows', 'jniMacos'
+    archiveBaseName = 'sci-calc'
+    archiveVersion = '1.0.0'
+    archiveClassifier = ''
+    // Compiled .class files at the Jar root so `java -jar` finds Main.
+    from sourceSets.main.output
+    // Bundle native libs under /native/<os>-<arch>/ for the SciCalc loader.
+    from(distDir) { into('') }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes 'Main-Class': 'com.scicalc.Main',
+                   'Implementation-Title': 'sci-calc',
+                   'Implementation-Version': '1.0.0'
+    }
+    doLast { println "Built Jar -> ${archiveFile.get().asFile}" }
+}
+
+// Make `build` assemble the cross-platform jar.
+tasks.named('build') { dependsOn 'buildJar' }

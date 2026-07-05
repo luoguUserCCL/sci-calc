@@ -1,0 +1,18 @@
+// native/engine/build.gradle — core math engine as a cpp-library.
+//
+// Modern Toolchain API: the cpp-library plugin auto-detects the host GCC from
+// PATH (no deprecated `model { toolChains {} }` block). Cross-compilation is
+// driven by Exec tasks in the root build.gradle that read the `sciCalcTools`
+// registry, so this subproject only needs the host build configuration.
+plugins { id 'cpp-library' }
+
+library {
+    publicHeaders.from = rootProject.ext.engineHdrDir
+    source.from = rootProject.ext.engineSrcDir
+    linkage = [ Linkage.STATIC ]
+}
+
+tasks.withType(CppCompile).configureEach {
+    compilerArgs.addAll('-std=c++20', '-O2', '-Wall', '-Wno-unused-parameter',
+                        '-I', rootProject.ext.engineHdrDir.absolutePath)
+}
