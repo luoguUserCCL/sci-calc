@@ -1,0 +1,31 @@
+# Build outputs
+build/
+.gradle/
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.jar
+!third_party/**/*.jar
+out/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+compile_commands.json
+
+# Tools (downloaded separately, not version-controlled)
+tools/
+
+# Local secrets / tokens
+*.token
+.env.local
+*.pem
+
+# OS
+.DS_Store
+Thumbs.db
