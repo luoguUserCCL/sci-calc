@@ -224,8 +224,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
         ImGui::Text("Math input:");
         ImGui::PushItemWidth(-120);
         bool submitted = ImGui::InputText("##input", inputBuf, sizeof(inputBuf),
-            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory,
-            nullptr, nullptr);
+            ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::PopItemWidth();
         ImGui::SameLine();
         if (ImGui::Button("Evaluate (Enter)") || submitted) {
