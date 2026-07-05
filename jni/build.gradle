@@ -70,7 +70,7 @@ buildNativeLib('Macos', 'macos-x86_64', 'libscicalc',
      '-o', new File(distDir, 'native/macos-x86_64/libscicalc.dylib').absolutePath])
 tasks.named('jniMacos').configure {
     def zig = file("${rootProject.ext.sciCalcTools.macosZig.path}/zig")
-    onlyIf { zig.exists() }
+    enabled = zig.exists()   // skip entirely when Zig is absent
 }
 
 // --- Package the cross-platform Jar with embedded native libs ---

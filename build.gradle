@@ -129,3 +129,47 @@ tasks.register('buildMacosExe', Exec) {
     doFirst { distDir.mkdirs() }
     doLast { println "Built macOS exe -> ${out}" }
 }
+
+// -----------------------------------------------------------------------------
+// Linux GUI build (Dear ImGui + GLFW + OpenGL3) — demonstrates the box-model
+// formula rendering engine on screen. Compiled with -DSCICALC_WITH_GUI so the
+// same main.cpp launches the GUI when --gui is passed.
+// -----------------------------------------------------------------------------
+def imguiDir = "${thirdParty}/imgui"
+def imguiSrcs = [
+    "${imguiDir}/imgui.cpp", "${imguiDir}/imgui_draw.cpp",
+    "${imguiDir}/imgui_tables.cpp", "${imguiDir}/imgui_widgets.cpp",
+    "${imguiDir}/imgui_demo.cpp",
+    "${imguiDir}/backends/imgui_impl_glfw.cpp",
+    "${imguiDir}/backends/imgui_impl_opengl3.cpp"
+]
+def glfwLib = "${thirdParty}/glfw-lib"
+def glHdr = "${thirdParty}/glheaders"
+def guiSrcs = files(fileTree(dir: engineSrcDir, include: '*.cpp')) +
+              files(fileTree(dir: appSrcDir, include: '*.cpp'))
+
+tasks.register('buildLinuxGui', Exec) {
+    group = 'sci-calc'
+    description = 'Build the Linux GUI executable (ImGui + GLFW + OpenGL3).'
+    def out = new File(distDir, 'sci-calc-linux-gui')
+    def allSrcs = guiSrcs.collect { it.absolutePath } + imguiSrcs
+    commandLine '/usr/bin/g++',
+            '-std=c++20', '-O2', '-Wall', '-Wno-unused-parameter',
+            '-DSCICALC_WITH_GUI',
+            '-I', engineHdrDir.absolutePath,
+            '-I', imguiDir, '-I', "${imguiDir}/backends",
+            '-I', "${glfwLib}/include",
+            '-I', glHdr,
+            *allSrcs,
+            '-o', out.absolutePath,
+            '-L', "${glfwLib}/lib", '-lglfw',
+            '-l:libGL.so.1', '-lX11', '-l:libXcursor.so.1', '-l:libXrandr.so.2',
+            '-l:libXi.so.6', '-l:libXinerama.so.1', '-lXext', '-ldl', '-lpthread',
+            '-Wl,-rpath,' + "${glfwLib}/lib",
+            '-static-libgcc', '-static-libstdc++'
+    inputs.files guiSrcs
+    inputs.files imguiSrcs
+    outputs.file out
+    doFirst { distDir.mkdirs() }
+    doLast { println "Built Linux GUI exe -> ${out}" }
+}
