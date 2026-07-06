@@ -61,6 +61,9 @@ static std::string flatString(const Expr& e) {
             if (e.name == "cong" && e.args.size() == 3)
                 return flatString(*e.args[0]) + " \xE2\x89\xA1 " + flatString(*e.args[1]) +
                        " (mod " + flatString(*e.args[2]) + ")";
+            // 分数: frac(a,b) -> a/b
+            if (e.name == "frac" && e.args.size() == 2)
+                return flatString(*e.args[0]) + "/" + flatString(*e.args[1]);
             std::string s = e.name + "(";
             for (size_t i = 0; i < e.args.size(); ++i) { if (i) s += ", "; s += flatString(*e.args[i]); }
             return s + ")";

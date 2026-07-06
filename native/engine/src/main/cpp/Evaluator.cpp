@@ -1053,6 +1053,13 @@ Value Evaluator::builtin(const std::string& name, const std::vector<Value>& args
         BigRational frac(r, two256);
         return Value::ofRat(lo + (hi - lo) * frac);
     }
+    // 分数: frac(a,b) -> a/b
+    if (name == "frac") {
+        need(2);
+        BigRational a = args[0].toRational(), b = args[1].toRational();
+        if (b.isZero()) throw std::runtime_error("frac: division by zero");
+        return Value::ofRat(a / b);
+    }
     // 组合数 C(n,m) = n! / (m! * (n-m)!)
     if (name == "combination" || name == "comb") {
         need(2);

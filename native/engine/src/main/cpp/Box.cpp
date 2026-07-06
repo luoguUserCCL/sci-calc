@@ -153,6 +153,10 @@ BoxPtr buildInputBox(const Expr& e) {
                 row.push_back(Box::makeText(")", Box::Normal));
                 return Box::makeRow(std::move(row));
             }
+            // 分数: frac(a,b) -> a/b (分数线渲染)
+            if (n == "frac" && e.args.size() == 2) {
+                return Box::makeFraction(buildInputBox(*e.args[0]), buildInputBox(*e.args[1]));
+            }
             // 组合数: combination(n,m) -> C 下标 n 上标 m
             if ((n == "combination" || n == "comb") && e.args.size() == 2) {
                 BoxPtr base = Box::makeText("C", Box::Identifier);
