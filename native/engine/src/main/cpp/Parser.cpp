@@ -208,22 +208,16 @@ ExprPtr Parser::parseMulDiv() {
     ExprPtr left = parsePower();
     while (true) {
         BinOp b;
+        bool isImplicit = false;
         if (cur().kind == TokKind::Star) b = BinOp::Mul;
         else if (cur().kind == TokKind::Slash) b = BinOp::Div;
         else if (cur().kind == TokKind::Percent) b = BinOp::Mod;
-        else if (isImplicitMul()) b = BinOp::Mul;  // 隐式乘法: 2x, xy, 2sin(x), (a)(b)
+        else if (isImplicitMul()) { b = BinOp::Mul; isImplicit = true; }  // 隐式乘法
         else break;
-        if (b == BinOp::Mul && (cur().kind == TokKind::Star || isImplicitMul())) {
-            if (cur().kind != TokKind::Star) {
-                // 隐式乘法不消费 token, 直接解析右侧
-            } else {
-                ++pos_; // 消费 *
-            }
-        } else {
-            ++pos_; // 消费 / %
-        }
+        if (!isImplicit) ++pos_;  // 消费 * / %
         ExprPtr right = parsePower();
         left = Expr::makeBinary(b, std::move(left), std::move(right));
+        if (isImplicit) left->implicit = true;  // 标记隐式乘法, 渲染不显示×
     }
     return left;
 }

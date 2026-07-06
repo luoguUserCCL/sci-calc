@@ -55,6 +55,8 @@ static std::string flatString(const Expr& e) {
         case Expr::Binary:
             if (e.binop == BinOp::Pow)
                 return flatString(*e.lhs) + "^(" + flatString(*e.rhs) + ")";
+            if (e.binop == BinOp::Mul && e.implicit)
+                return flatString(*e.lhs) + flatString(*e.rhs);  // 隐式乘法不显示×
             return "(" + flatString(*e.lhs) + flatOp(e.binop) + flatString(*e.rhs) + ")";
         case Expr::Call: {
             // 同余: cong(a,b,m) -> a ≡ b (mod m)

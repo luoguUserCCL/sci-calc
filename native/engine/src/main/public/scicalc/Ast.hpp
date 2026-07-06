@@ -55,6 +55,7 @@ struct Expr {
     // Binary
     BinOp binop{BinOp::Add};
     ExprPtr lhs, rhs;
+    bool implicit = false;  // 隐式乘法标记 (2x, xy, (a)(b) 等, 渲染不显示×)
 
     // Call
     std::vector<ExprPtr> args;

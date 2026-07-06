@@ -107,7 +107,11 @@ BoxPtr buildInputBox(const Expr& e) {
                 return Box::makeSupSub(std::move(base), std::move(exp), nullptr);
             }
             row.push_back(buildInputBox(*e.lhs));
-            row.push_back(Box::makeText(opSymbol(e.binop), Box::Operator));
+            if (e.binop == BinOp::Mul && e.implicit) {
+                // 隐式乘法: 不显示 ×, 直接拼接 (如 2x, xy, (a)(b))
+            } else {
+                row.push_back(Box::makeText(opSymbol(e.binop), Box::Operator));
+            }
             row.push_back(buildInputBox(*e.rhs));
             return Box::makeRow(std::move(row));
         }

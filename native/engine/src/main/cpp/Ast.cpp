@@ -10,6 +10,7 @@ ExprPtr Expr::clone() const {
     e->name = name;
     e->unop = unop;
     e->binop = binop;
+    e->implicit = implicit;
     if (lhs) e->lhs = lhs->clone();
     if (rhs) e->rhs = rhs->clone();
     e->args.reserve(args.size());
