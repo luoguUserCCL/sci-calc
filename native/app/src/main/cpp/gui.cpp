@@ -198,10 +198,10 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     io.Fonts->AddFontFromMemoryTTF(
         (void*)kKaTeXAMS, kKaTeXAMS_len, 24.0f, &mergeCfg, amsRanges);
 
-    // KaTeX_AMS 独立字体 (用于双线字母, 不合并) — 字号略大补偿 AMS 字形偏小
+    // KaTeX_AMS 独立字体 (用于双线字母, 不合并) — 字号更大补偿 AMS 字形偏小
     ImFontConfig amsCfg; amsCfg.FontDataOwnedByAtlas = false;
     ImFont* katexAMS = io.Fonts->AddFontFromMemoryTTF(
-        (void*)kKaTeXAMS, kKaTeXAMS_len, 28.0f, &amsCfg, amsRanges);  // 28px 补偿偏小
+        (void*)kKaTeXAMS, kKaTeXAMS_len, 32.0f, &amsCfg, amsRanges);  // 32px 补偿偏小
     // KaTeX Size1 (大尺寸 ∑∏∫√)
     static const ImWchar katexSizeRanges[] = {
         0x0020, 0x00FF,
@@ -211,10 +211,20 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     ImFont* katexSize1 = io.Fonts->AddFontFromMemoryTTF(
         (void*)kKaTeXSize1, kKaTeXSize1_len, 28.0f, &katexCfg, katexSizeRanges);
 
-    // 数学渲染用 KaTeX Main 为主, Size1 为大符号, AMS 为双线字母
+    // KaTeX_Math-Italic 独立字体 (数字、单字母变量用数学斜体)
+    static const ImWchar mathItalicRanges[] = {
+        0x0020, 0x00FF,  // Basic Latin + Latin-1 (数字、运算符 fallback)
+        0x0370, 0x03FF,  // Greek
+        0,
+    };
+    ImFont* katexMathItalic = io.Fonts->AddFontFromMemoryTTF(
+        (void*)kKaTeXMathItalic, kKaTeXMathItalic_len, 24.0f, &katexCfg, mathItalicRanges);
+
+    // 数学渲染用 KaTeX Main 为主, Size1 为大符号, AMS 为双线字母, Math-Italic 为数字/变量
     mathFont = katexMain ? katexMain : mainFont;
     ImFont* bigOpFont = katexSize1 ? katexSize1 : mathFont;
     ImFont* amsFont = katexAMS ? katexAMS : mathFont;
+    ImFont* mathItalicFont = katexMathItalic ? katexMathItalic : mathFont;
     ImFont* smallFont = mathFont;
 
     ImGui::StyleColorsDark();
@@ -225,6 +235,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     renderer.setFonts(mainFont, mathFont, smallFont);
     renderer.setBigOpFont(bigOpFont);
     renderer.setAmsFont(amsFont);
+    renderer.setMathItalicFont(mathItalicFont);
     renderer.setScale(30.0f);
 
     // UI state
