@@ -14,13 +14,26 @@ void BoxRenderer::setFonts(ImFont* main, ImFont* math, ImFont* small) {
 static ImFont* fallback(ImFont* f, ImFont* def) { return f ? f : def; }
 
 ImFont* BoxRenderer::fontFor(const Box& b) {
-    // 双线字母 (𝕀, ℝ, ℚ, ℤ) 用 KaTeX_AMS 字体 (字号已在 gui.cpp 中补偿)
+    // 双线字母 (𝕀, ℝ, ℚ, ℤ) 用 KaTeX_AMS (字号已在 gui.cpp 补偿)
     if (b.style == Box::DoubleStruck) return fallback(amsFont_, math_);
-    // Number 和单字母 Identifier 用 KaTeX_Math-Italic (数学斜体)
-    if (b.style == Box::Number) return fallback(mathItalicFont_, math_);
-    if (b.style == Box::Identifier && b.text.size() <= 1)
-        return fallback(mathItalicFont_, math_);
-    // 多字符函数名/变量名、运算符、符号等用 KaTeX_Main
+    // 数字 -> KaTeX_Main Regular
+    if (b.style == Box::Number) return fallback(math_, ImGui::GetFont());
+    // 运算符/符号 -> KaTeX_Main Regular
+    if (b.style == Box::Operator || b.style == Box::Symbol) return fallback(math_, ImGui::GetFont());
+    // 普通文本/关键字 -> KaTeX_Main Regular
+    if (b.style == Box::Normal || b.style == Box::Keyword) return fallback(math_, ImGui::GetFont());
+    // Identifier: 按内容选择
+    if (b.style == Box::Identifier) {
+        if (b.text.size() == 1) {
+            char c = b.text[0];
+            // 大写字母 A-Z -> KaTeX_Main Italic
+            if (c >= 'A' && c <= 'Z') return fallback(mainItalicFont_, math_);
+            // 小写字母 a-z -> KaTeX_Math Italic
+            return fallback(mathItalicFont_, math_);
+        }
+        // 多字符 Identifier (函数名/多字符变量) -> KaTeX_Main Regular
+        return fallback(math_, ImGui::GetFont());
+    }
     return fallback(math_, ImGui::GetFont());
 }
 

@@ -25,6 +25,7 @@ public:
     void setBigOpFont(ImFont* bigOp) { bigOpFont_ = bigOp; }
     void setAmsFont(ImFont* ams) { amsFont_ = ams; }  // KaTeX_AMS for double-struck
     void setMathItalicFont(ImFont* mi) { mathItalicFont_ = mi; }  // KaTeX_Math-Italic
+    void setMainItalicFont(ImFont* mi) { mainItalicFont_ = mi; }  // KaTeX_Main-Italic (大写字母)
     void setScale(float px) { fontSize_ = px; }
 
     /// Compute layout metrics for a box tree (used to size the render area).
@@ -39,7 +40,8 @@ private:
     ImFont* small_ = nullptr;
     ImFont* bigOpFont_ = nullptr;  // 大运算符字体 (KaTeX Size1)
     ImFont* amsFont_ = nullptr;    // KaTeX_AMS (双线字母)
-    ImFont* mathItalicFont_ = nullptr; // KaTeX_Math-Italic (数字、单字母变量)
+    ImFont* mathItalicFont_ = nullptr; // KaTeX_Math-Italic (小写字母、希腊、符号)
+    ImFont* mainItalicFont_ = nullptr; // KaTeX_Main-Italic (大写字母)
     float fontSize_ = 20.0f;
 
     // internal layout+draw combined; measure() calls with draw=false.

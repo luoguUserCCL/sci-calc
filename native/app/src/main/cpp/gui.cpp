@@ -31,6 +31,7 @@
 
 // 内嵌 KaTeX 数学字体 (用于公式渲染)
 #include "embedded/katex_main.h"
+#include "embedded/katex_main_italic.h"
 #include "embedded/katex_ams.h"
 #include "embedded/katex_size1.h"
 #include "embedded/katex_math_italic.h"
@@ -201,7 +202,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     // KaTeX_AMS 独立字体 (用于双线字母, 不合并) — 字号更大补偿 AMS 字形偏小
     ImFontConfig amsCfg; amsCfg.FontDataOwnedByAtlas = false;
     ImFont* katexAMS = io.Fonts->AddFontFromMemoryTTF(
-        (void*)kKaTeXAMS, kKaTeXAMS_len, 32.0f, &amsCfg, amsRanges);  // 32px 补偿偏小
+        (void*)kKaTeXAMS, kKaTeXAMS_len, 36.0f, &amsCfg, amsRanges);  // 36px 补偿偏小
     // KaTeX Size1 (大尺寸 ∑∏∫√)
     static const ImWchar katexSizeRanges[] = {
         0x0020, 0x00FF,
@@ -220,11 +221,21 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     ImFont* katexMathItalic = io.Fonts->AddFontFromMemoryTTF(
         (void*)kKaTeXMathItalic, kKaTeXMathItalic_len, 24.0f, &katexCfg, mathItalicRanges);
 
-    // 数学渲染用 KaTeX Main 为主, Size1 为大符号, AMS 为双线字母, Math-Italic 为数字/变量
+    // KaTeX_Main-Italic 独立字体 (大写字母用, 如 C, P, R, Q, Z 的斜体)
+    static const ImWchar mainItalicRanges[] = {
+        0x0020, 0x00FF,  // Basic Latin + Latin-1
+        0x0100, 0x017F,  // Latin Extended-A
+        0,
+    };
+    ImFont* katexMainItalic = io.Fonts->AddFontFromMemoryTTF(
+        (void*)kKaTeXMainItalic, kKaTeXMainItalic_len, 24.0f, &katexCfg, mainItalicRanges);
+
+    // 数学渲染用 KaTeX Main 为主, Size1 为大符号, AMS 为双线字母, Math-Italic 为小写, Main-Italic 为大写
     mathFont = katexMain ? katexMain : mainFont;
     ImFont* bigOpFont = katexSize1 ? katexSize1 : mathFont;
     ImFont* amsFont = katexAMS ? katexAMS : mathFont;
     ImFont* mathItalicFont = katexMathItalic ? katexMathItalic : mathFont;
+    ImFont* mainItalicFont = katexMainItalic ? katexMainItalic : mathFont;
     ImFont* smallFont = mathFont;
 
     ImGui::StyleColorsDark();
@@ -236,6 +247,7 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     renderer.setBigOpFont(bigOpFont);
     renderer.setAmsFont(amsFont);
     renderer.setMathItalicFont(mathItalicFont);
+    renderer.setMainItalicFont(mainItalicFont);
     renderer.setScale(30.0f);
 
     // UI state
