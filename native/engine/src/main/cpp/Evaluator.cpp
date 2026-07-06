@@ -46,7 +46,34 @@ Value Evaluator::getVar(const std::string& n) const {
 Value Evaluator::eval(const Expr& e) {
     switch (e.kind) {
         case Expr::Number: return Value::ofRat(e.num);
-        case Expr::Var:    return getVar(e.name);
+        case Expr::Var: {
+            // 尝试直接获取变量
+            try {
+                return getVar(e.name);
+            } catch (...) {
+                // 未定义: 尝试拆分为单字符变量的隐式乘法 (xy -> x*y, abc -> a*b*c)
+                // 仅当变量名长度>1且每个单字符变量都已定义时才拆分
+                if (e.name.size() > 1) {
+                    bool allDefined = true;
+                    for (char c : e.name) {
+                        std::string single(1, c);
+                        if (single == "e" || single == "E") continue;  // e 是常量
+                        auto it = vars_.find(single);
+                        if (it == vars_.end()) { allDefined = false; break; }
+                    }
+                    if (allDefined) {
+                        // 拆分为隐式乘法: 逐个求值并相乘
+                        Value result = getVar(std::string(1, e.name[0]));
+                        for (size_t i = 1; i < e.name.size(); ++i) {
+                            Value next = getVar(std::string(1, e.name[i]));
+                            result = evalBinary(BinOp::Mul, result, next, e);
+                        }
+                        return result;
+                    }
+                }
+                throw;  // 重新抛出 "undefined variable"
+            }
+        }
         case Expr::SetName:
             if (e.name == "Real") return Value::ofSet(SetValue::makeNamed("Real"));
             if (e.name == "Rational") return Value::ofSet(SetValue::makeNamed("Rational"));

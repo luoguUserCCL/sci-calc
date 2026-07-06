@@ -88,6 +88,21 @@ BoxPtr buildInputBox(const Expr& e) {
         case Expr::Var: {
             if (e.name == "pi") return Box::makeText("\xCF\x80", Box::Symbol); // π
             if (e.name == "e") return Box::makeText("e", Box::Identifier);
+            // 多字符变量名: 若全是小写字母(a-z), 拆分为单字符 Row (每个用 Math Italic)
+            // 这样 xy 显示为 xy (斜体), abc 显示为 abc (斜体)
+            // 含大写/数字的变量名(如 myVar, x1) 不拆分, 用 Main Regular
+            if (e.name.size() > 1) {
+                bool allLower = true;
+                for (char c : e.name) {
+                    if (c < 'a' || c > 'z') { allLower = false; break; }
+                }
+                if (allLower) {
+                    std::vector<BoxPtr> chars;
+                    for (char c : e.name)
+                        chars.push_back(Box::makeText(std::string(1, c), Box::Identifier));
+                    return Box::makeRow(std::move(chars));
+                }
+            }
             return Box::makeText(e.name, Box::Identifier);
         }
         case Expr::SetName: return Box::makeText(setNameSym(e.name), Box::DoubleStruck);
