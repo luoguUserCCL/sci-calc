@@ -199,10 +199,16 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     io.Fonts->AddFontFromMemoryTTF(
         (void*)kKaTeXAMS, kKaTeXAMS_len, 24.0f, &mergeCfg, amsRanges);
 
-    // KaTeX_AMS 独立字体 (用于双线字母, 不合并) — 字号更大补偿 AMS 字形偏小
+    // KaTeX_AMS 独立字体 (用于双线字母, 不合并)
+    // AMS 字体行高(ascent+descent=1466)比 Main(1175)大25%, 但字形本身差不多,
+    // 导致相同字号下 AMS 字形视觉偏小约25%。补偿: 用更大字号。
+    // Main R 渲染高度 ≈ fontSize * 705/1175 = 0.60*fontSize
+    // AMS R 渲染高度 ≈ amsSize * 685/1466 = 0.467*amsSize
+    // 匹配: amsSize ≈ fontSize * 0.60/0.467 ≈ fontSize * 1.28
+    // 用 42px (30*1.4) 确保充分补偿
     ImFontConfig amsCfg; amsCfg.FontDataOwnedByAtlas = false;
     ImFont* katexAMS = io.Fonts->AddFontFromMemoryTTF(
-        (void*)kKaTeXAMS, kKaTeXAMS_len, 36.0f, &amsCfg, amsRanges);  // 36px 补偿偏小
+        (void*)kKaTeXAMS, kKaTeXAMS_len, 42.0f, &amsCfg, amsRanges);  // 42px 匹配 30px 的 Main
     // KaTeX Size1 (大尺寸 ∑∏∫√)
     static const ImWchar katexSizeRanges[] = {
         0x0020, 0x00FF,
