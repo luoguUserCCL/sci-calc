@@ -233,14 +233,14 @@ ExprPtr Parser::parseMulDiv() {
 // 注意: 用户单独键入的括号不省略乘号 — 但 (a)(b) 应视为乘法
 bool Parser::isImplicitMul() {
     TokKind k = cur().kind;
-    // 数字开头: 2x 中的 x 已被解析, 不会到这里
-    // 这里检测的是: 前一个因子后紧跟 Number/Ident/( — 视为乘法
-    if (k == TokKind::Number) return true;  // 2x 后跟数字 (罕见)
+    // 不把 "(mod ...)" 当隐式乘法 — cong 同余语法需要
+    if (k == TokKind::LParen && peek(1).kind == TokKind::KW_mod) return false;
+    if (k == TokKind::Number) return true;
     if (k == TokKind::Ident) return true;   // 2x, xy
     if (k == TokKind::LParen) return true;  // (a)(b), 2(a+b)
     if (k == TokKind::KW_Real || k == TokKind::KW_Rational ||
         k == TokKind::KW_Quotient || k == TokKind::KW_Integer ||
-        k == TokKind::KW_Zahlen) return true;  // 2Real
+        k == TokKind::KW_Zahlen) return true;
     return false;
 }
 
