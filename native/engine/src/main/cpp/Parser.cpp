@@ -325,7 +325,8 @@ ExprPtr Parser::parsePrimary() {
                 return Expr::makeInterval(k, std::move(first), std::move(second));
             }
             expect(TokKind::RParen, "')'");
-            return first;
+            // 用 __group__ 标记保留用户输入的括号 (渲染时显示括号)
+            return Expr::makeCall("__group__", std::move(first));
         }
         case TokKind::LBracket: {
             ++pos_; // [

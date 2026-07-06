@@ -61,6 +61,9 @@ static std::string flatString(const Expr& e) {
             if (e.name == "cong" && e.args.size() == 3)
                 return flatString(*e.args[0]) + " \xE2\x89\xA1 " + flatString(*e.args[1]) +
                        " (mod " + flatString(*e.args[2]) + ")";
+            // 用户输入的分组括号
+            if (e.name == "__group__" && e.args.size() == 1)
+                return "(" + flatString(*e.args[0]) + ")";
             // 分数: frac(a,b) -> a/b
             if (e.name == "frac" && e.args.size() == 2)
                 return flatString(*e.args[0]) + "/" + flatString(*e.args[1]);

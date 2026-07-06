@@ -153,6 +153,10 @@ BoxPtr buildInputBox(const Expr& e) {
                 row.push_back(Box::makeText(")", Box::Normal));
                 return Box::makeRow(std::move(row));
             }
+            // 用户输入的分组括号: __group__(expr) -> (expr)
+            if (n == "__group__" && e.args.size() == 1) {
+                return Box::makeDelimited("(", ")", buildInputBox(*e.args[0]));
+            }
             // 分数: frac(a,b) -> a/b (分数线渲染)
             if (n == "frac" && e.args.size() == 2) {
                 return Box::makeFraction(buildInputBox(*e.args[0]), buildInputBox(*e.args[1]));
@@ -186,24 +190,25 @@ BoxPtr buildInputBox(const Expr& e) {
                 return Box::makeDelimited("{", "}", std::move(brace));
             }
             // generic function: name(arg, ...)
-            // 某些函数强制加括号 (exp, rand, abs, floor, ceil, fact, gcd, lcm, etc.)
+            // 某些函数强制给参数加括号 (单参数函数如 exp, rand, abs 等)
             // 其他函数: 单项式参数不加括号, 含 +-*/% 的参数加括号
             {
                 static const char* forceParens[] = {
-                    "exp","rand","abs","floor","ceil","trunc","round","sign","sgn",
-                    "fact","factorial","gcd","lcm","min","max","pow","Iverson","cong",
+                    "exp","abs","floor","ceil","trunc","round","sign","sgn",
+                    "fact","factorial","Iverson","cong",
                     "combination","comb","permutation","perm","stirling1","stirling2", nullptr
                 };
                 bool force = false;
                 for (auto* fn : forceParens) { if (fn && n == fn) { force = true; break; } }
-                std::vector<BoxPtr> args;
+                // 直接用 Row 构建: 函数名 + ( 参数们 )
+                std::vector<BoxPtr> row;
+                row.push_back(Box::makeText(n, Box::Normal));  // 函数名用 Main Regular
+                std::vector<BoxPtr> argBoxes;
                 for (size_t i = 0; i < e.args.size(); ++i) {
-                    if (i) args.push_back(Box::makeText(", ", Box::Normal));
+                    if (i) argBoxes.push_back(Box::makeText(", ", Box::Normal));
                     if (force) {
-                        // 强制加括号
-                        args.push_back(Box::makeDelimited("(", ")", buildInputBox(*e.args[i])));
+                        argBoxes.push_back(Box::makeDelimited("(", ")", buildInputBox(*e.args[i])));
                     } else {
-                        // 单项式不加括号, 含运算符的加括号
                         bool needParen = false;
                         if (e.args[i] && e.args[i]->kind == Expr::Binary) {
                             BinOp op = e.args[i]->binop;
@@ -212,12 +217,13 @@ BoxPtr buildInputBox(const Expr& e) {
                                 needParen = true;
                         }
                         if (needParen)
-                            args.push_back(Box::makeDelimited("(", ")", buildInputBox(*e.args[i])));
+                            argBoxes.push_back(Box::makeDelimited("(", ")", buildInputBox(*e.args[i])));
                         else
-                            args.push_back(buildInputBox(*e.args[i]));
+                            argBoxes.push_back(buildInputBox(*e.args[i]));
                     }
                 }
-                return Box::makeFunction(n, nullptr, Box::makeRow(std::move(args)));
+                row.push_back(Box::makeDelimited("(", ")", Box::makeRow(std::move(argBoxes))));
+                return Box::makeRow(std::move(row));
             }
         }
         case Expr::AssignVar: {

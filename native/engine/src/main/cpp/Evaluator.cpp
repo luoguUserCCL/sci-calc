@@ -1058,6 +1058,11 @@ Value Evaluator::builtin(const std::string& name, const std::vector<Value>& args
         BigRational frac(r, two256);
         return Value::ofRat(lo + (hi - lo) * frac);
     }
+    // 用户输入的分组括号: __group__(expr) -> expr
+    if (name == "__group__") {
+        need(1);
+        return args[0];
+    }
     // 分数: frac(a,b) -> a/b
     if (name == "frac") {
         need(2);
