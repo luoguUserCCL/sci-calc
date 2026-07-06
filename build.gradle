@@ -157,29 +157,67 @@ def glHdr = "${thirdParty}/glheaders"
 def guiSrcs = files(fileTree(dir: engineSrcDir, include: '*.cpp')) +
               files(fileTree(dir: appSrcDir, include: '*.cpp'))
 
-tasks.register('buildLinuxGui', Exec) {
+// GLFW 源文件 (从源码编译, 静态链接)
+def glfwSrcDir = "${thirdParty}/glfw/src"
+def glfwCommonSrcs = [
+    "${glfwSrcDir}/context.c", "${glfwSrcDir}/init.c", "${glfwSrcDir}/input.c",
+    "${glfwSrcDir}/monitor.c", "${glfwSrcDir}/vulkan.c", "${glfwSrcDir}/window.c",
+    "${glfwSrcDir}/egl_context.c", "${glfwSrcDir}/osmesa_context.c", "${glfwSrcDir}/platform.c",
+    "${glfwSrcDir}/null_init.c", "${glfwSrcDir}/null_joystick.c",
+    "${glfwSrcDir}/null_monitor.c", "${glfwSrcDir}/null_window.c"
+]
+
+tasks.register('buildLinuxGui') {
     group = 'sci-calc'
-    description = 'Build the Linux GUI executable (ImGui + GLFW + OpenGL3).'
+    description = 'Build the Linux GUI executable (ImGui + GLFW source static + OpenGL3).'
     def out = new File(distDir, 'sci-calc-linux-gui')
-    def allSrcs = guiSrcs.collect { it.absolutePath } + imguiSrcs
-    commandLine '/usr/bin/g++',
-            '-std=c++20', '-O2', '-Wall', '-Wno-unused-parameter',
-            '-DSCICALC_WITH_GUI',
-            '-I', engineHdrDir.absolutePath,
-            '-I', imguiDir, '-I', "${imguiDir}/backends",
-            '-I', "${glfwLib}/include",
-            '-I', glHdr,
-            *allSrcs,
-            '-o', out.absolutePath,
-            '-L', "${glfwLib}/lib", '-lglfw',
-            '-l:libGL.so.1', '-lX11', '-l:libXcursor.so.1', '-l:libXrandr.so.2',
-            '-l:libXi.so.6', '-l:libXinerama.so.1', '-lXext', '-ldl', '-lpthread',
-            '-Wl,-rpath,' + "${glfwLib}/lib",
-            '-static-libgcc', '-static-libstdc++'
-    inputs.files guiSrcs
-    inputs.files imguiSrcs
+    def objDir = new File(distDir, 'obj/linux-gui')
+    // GLFW X11 平台源文件 (含 POSIX 平台依赖)
+    def glfwX11Srcs = [
+        "${glfwSrcDir}/x11_init.c", "${glfwSrcDir}/x11_monitor.c", "${glfwSrcDir}/x11_window.c",
+        "${glfwSrcDir}/glx_context.c", "${glfwSrcDir}/linux_joystick.c",
+        "${glfwSrcDir}/posix_thread.c", "${glfwSrcDir}/posix_module.c",
+        "${glfwSrcDir}/posix_time.c", "${glfwSrcDir}/posix_poll.c",
+        "${glfwSrcDir}/xkb_unicode.c",
+    ]
+    doFirst {
+        distDir.mkdirs(); objDir.mkdirs()
+        // 1. 编译 GLFW C 源文件 (X11 后端)
+        (glfwCommonSrcs + glfwX11Srcs).each { src ->
+            def obj = new File(objDir, (src - "${glfwSrcDir}/").replace('/', '_').replace('.c', '.o'))
+            exec {
+                executable '/usr/bin/gcc'
+                args '-c', '-O2', '-D_GLFW_X11',
+                    '-I', "${thirdParty}/glfw/include", '-I', glHdr,
+                    '-I', '/usr/include', '-I', '/tmp/x11hdrs/usr/include',
+                    src, '-o', obj.absolutePath
+            }
+        }
+        // 2. 编译 C++ 源文件 (engine + app + imgui)
+        def cppSrcs = guiSrcs.collect { it.absolutePath } + imguiSrcs
+        cppSrcs.each { src ->
+            def obj = new File(objDir, (new File(src).name).replace('.cpp', '.o'))
+            exec {
+                executable '/usr/bin/g++'
+                args '-c', '-std=c++20', '-O2', '-Wall', '-Wno-unused-parameter',
+                    '-DSCICALC_WITH_GUI',
+                    '-I', engineHdrDir.absolutePath, '-I', imguiDir, '-I', "${imguiDir}/backends",
+                    '-I', "${thirdParty}/glfw/include", '-I', glHdr,
+                    src, '-o', obj.absolutePath
+            }
+        }
+        // 3. 链接: 所有 .o + 系统库 (GLFW 静态链接, 无需 libglfw.so)
+        def allObjs = objDir.listFiles()?.findAll { it.name.endsWith('.o') }?.collect { it.absolutePath } ?: []
+        exec {
+            executable '/usr/bin/g++'
+            args(*allObjs, '-o', out.absolutePath,
+                 '-l:libGL.so.1', '-lX11', '-l:libXcursor.so.1', '-l:libXrandr.so.2',
+                 '-l:libXi.so.6', '-l:libXinerama.so.1', '-lXext', '-ldl', '-lpthread',
+                 '-static-libgcc', '-static-libstdc++')
+        }
+    }
+    inputs.files guiSrcs; inputs.files imguiSrcs; inputs.files files(glfwCommonSrcs + glfwX11Srcs)
     outputs.file out
-    doFirst { distDir.mkdirs() }
     doLast { println "Built Linux GUI exe -> ${out}" }
 }
 
@@ -188,15 +226,6 @@ tasks.register('buildLinuxGui', Exec) {
 // 用 MinGW-w64 ucrt64 交叉编译，GLFW 从源码编译进可执行文件。
 // -mwindows 使链接器生成 GUI 子系统程序（不弹控制台窗口）。
 // -----------------------------------------------------------------------------
-def glfwSrcDir = "${thirdParty}/glfw/src"
-// GLFW 平台无关源文件
-def glfwCommonSrcs = [
-    "${glfwSrcDir}/context.c", "${glfwSrcDir}/init.c", "${glfwSrcDir}/input.c",
-    "${glfwSrcDir}/monitor.c", "${glfwSrcDir}/vulkan.c", "${glfwSrcDir}/window.c",
-    "${glfwSrcDir}/egl_context.c", "${glfwSrcDir}/osmesa_context.c", "${glfwSrcDir}/platform.c",
-    "${glfwSrcDir}/null_init.c", "${glfwSrcDir}/null_joystick.c",
-    "${glfwSrcDir}/null_monitor.c", "${glfwSrcDir}/null_window.c"
-]
 // GLFW Win32 平台源文件
 def glfwWin32Srcs = [
     "${glfwSrcDir}/win32_init.c", "${glfwSrcDir}/win32_joystick.c", "${glfwSrcDir}/win32_module.c",
