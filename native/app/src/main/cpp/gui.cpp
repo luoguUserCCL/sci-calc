@@ -170,9 +170,11 @@ static int runGuiImpl(int argc, char** argv, Engine& engine) {
     static const ImWchar katexAllRanges[] = {
         0x0020, 0x00FF, // Basic Latin + Latin-1 (数字, +,-,*,/ 等)
         0x0100, 0x017F, // Latin Extended-A
+        0x0300, 0x036F, // Combining Diacritical Marks
         0x0370, 0x03FF, // Greek (π, θ, Δ 等)
         0x2070, 0x209F, // superscripts/subscripts
         0x2200, 0x22FF, // math operators (√≡≤≥∈⊆∩∪∧∨¬−×÷≠)
+        0x2308, 0x230B, // ⌈⌉⌊⌋ (向上/向下取整)
         0x228A, 0x228B, // ⊊ ⊋ (AMS)
         0x27C0, 0x27EF, // misc math
         0x2A00, 0x2AFF, // supp math operators

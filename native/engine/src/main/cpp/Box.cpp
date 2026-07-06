@@ -195,7 +195,7 @@ BoxPtr buildInputBox(const Expr& e) {
                     "combination","comb","permutation","perm","stirling1","stirling2", nullptr
                 };
                 bool force = false;
-                for (auto* fn : forceParens) { if (n == fn) { force = true; break; } }
+                for (auto* fn : forceParens) { if (fn && n == fn) { force = true; break; } }
                 std::vector<BoxPtr> args;
                 for (size_t i = 0; i < e.args.size(); ++i) {
                     if (i) args.push_back(Box::makeText(", ", Box::Normal));

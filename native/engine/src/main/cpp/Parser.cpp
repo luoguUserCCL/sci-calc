@@ -203,19 +203,45 @@ ExprPtr Parser::parseAddSub() {
     return left;
 }
 
-// level 5: * / % (left-assoc)
+// level 5: * / % (left-assoc) + 隐式乘法
 ExprPtr Parser::parseMulDiv() {
     ExprPtr left = parsePower();
-    while (cur().kind == TokKind::Star || cur().kind == TokKind::Slash || cur().kind == TokKind::Percent) {
+    while (true) {
         BinOp b;
         if (cur().kind == TokKind::Star) b = BinOp::Mul;
         else if (cur().kind == TokKind::Slash) b = BinOp::Div;
-        else b = BinOp::Mod;
-        ++pos_;
+        else if (cur().kind == TokKind::Percent) b = BinOp::Mod;
+        else if (isImplicitMul()) b = BinOp::Mul;  // 隐式乘法: 2x, xy, 2sin(x), (a)(b)
+        else break;
+        if (b == BinOp::Mul && (cur().kind == TokKind::Star || isImplicitMul())) {
+            if (cur().kind != TokKind::Star) {
+                // 隐式乘法不消费 token, 直接解析右侧
+            } else {
+                ++pos_; // 消费 *
+            }
+        } else {
+            ++pos_; // 消费 / %
+        }
         ExprPtr right = parsePower();
         left = Expr::makeBinary(b, std::move(left), std::move(right));
     }
     return left;
+}
+
+// 判断是否为隐式乘法上下文:
+// 当前 token 是 Number/Ident/LParen/LBrace/函数关键字 且前一个因子已结束
+// 注意: 用户单独键入的括号不省略乘号 — 但 (a)(b) 应视为乘法
+bool Parser::isImplicitMul() {
+    TokKind k = cur().kind;
+    // 数字开头: 2x 中的 x 已被解析, 不会到这里
+    // 这里检测的是: 前一个因子后紧跟 Number/Ident/( — 视为乘法
+    if (k == TokKind::Number) return true;  // 2x 后跟数字 (罕见)
+    if (k == TokKind::Ident) return true;   // 2x, xy
+    if (k == TokKind::LParen) return true;  // (a)(b), 2(a+b)
+    if (k == TokKind::KW_Real || k == TokKind::KW_Rational ||
+        k == TokKind::KW_Quotient || k == TokKind::KW_Integer ||
+        k == TokKind::KW_Zahlen) return true;  // 2Real
+    return false;
 }
 
 // level 4: ^ (right-assoc)
@@ -244,6 +270,8 @@ ExprPtr Parser::parsePostfix() {
         if (cur().kind == TokKind::LParen) {
             // 不把 "(mod ...)" 当函数调用 — cong 同余语法需要
             if (peek(1).kind == TokKind::KW_mod) break;
+            // 只有 Var 后跟 ( 才是函数调用; 其他情况 (如 (a)(b)) 由 parseMulDiv 处理隐式乘法
+            if (node->kind != Expr::Var) break;
             // function call
             ++pos_; // (
             std::vector<ExprPtr> args;

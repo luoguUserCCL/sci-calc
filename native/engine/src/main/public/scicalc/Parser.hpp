@@ -34,7 +34,8 @@ private:
     ExprPtr parseRelationalRest(ExprPtr first);  // cong 回退后的普通关系链
     ExprPtr parseSetOps();        // cap cup \           (left, level 7)
     ExprPtr parseAddSub();        // + -                 (left, level 6)
-    ExprPtr parseMulDiv();        // * / %               (left, level 5)
+    ExprPtr parseMulDiv();        // * / % + 隐式乘法  (left, level 5)
+    bool isImplicitMul();         // 判断当前是否为隐式乘法上下文
     ExprPtr parsePower();         // ^                   (right, level 4)
     ExprPtr parseUnary();         // unary + - not       (right, level 3)
     ExprPtr parsePostfix();       // function call       (level 2)

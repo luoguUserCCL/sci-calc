@@ -978,7 +978,12 @@ Value Evaluator::builtin(const std::string& name, const std::vector<Value>& args
                 if (std::string(fname) == "cos" || std::string(fname) == "sec") return Value::ofRat(BigRational(1));
                 return Value::ofRat(BigRational(0));
             }
-            return Value::ofSym(Expr::makeCall(fname, node.args[0]->clone()));
+            // 对已求值的参数, 重建表达式用于符号显示
+            if (args[0].isSymbolic() && args[0].sym) {
+                return Value::ofSym(Expr::makeCall(fname, args[0].sym->clone()));
+            }
+            // 非符号参数 (如 cos(2)): 小数模式计算
+            return Value::ofDec(fn(args[0].toBigFloat(config.precision)));
         }
         return Value::ofDec(fn(args[0].toBigFloat(config.precision)));
     };
